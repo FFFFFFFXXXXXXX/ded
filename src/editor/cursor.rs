@@ -1,4 +1,3 @@
-// use crate::widget::Viewport;
 use super::{viewport::Viewport, word};
 use std::cmp;
 

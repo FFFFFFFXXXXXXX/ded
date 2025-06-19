@@ -1,11 +1,10 @@
 use anyhow::Result;
 
 use crossterm::event::Event;
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::DefaultTerminal;
+use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::style::{Modifier, Style};
-use ratatui::text::{Line, Span};
-use ratatui::widgets::{Paragraph, Widget};
-use ratatui::{DefaultTerminal, Frame};
+use ratatui::widgets::Paragraph;
 
 use std::borrow::Cow;
 use std::io::{self, Write};
@@ -107,6 +106,9 @@ impl<'a> Editor<'a> {
     }
 
     fn run(&mut self, mut terminal: DefaultTerminal) -> Result<()> {
+        let terminal_size = terminal.size()?;
+        self.update_terminal_size(terminal_size.width, terminal_size.height);
+
         loop {
             // render state to terminal
             self.render(&mut terminal)?;
@@ -114,7 +116,8 @@ impl<'a> Editor<'a> {
             // wait for next userinput (blocking!)
             let event = crossterm::event::read()?;
             // manually re-render on window resize because Event::Resize(_, _) gets ignored by tui_textarea
-            if let Event::Resize(_, _) = event {
+            if let Event::Resize(width, height) = event {
+                self.update_terminal_size(width, height);
                 self.render(&mut terminal)?;
             }
 
@@ -131,6 +134,12 @@ impl<'a> Editor<'a> {
         }
 
         Ok(())
+    }
+
+    fn update_terminal_size(&mut self, width: u16, height: u16) {
+        for buffer in &mut self.buffers {
+            buffer.textarea.viewport.update_size(width, height)
+        }
     }
 
     fn render(&mut self, terminal: &mut DefaultTerminal) -> Result<()> {
@@ -174,6 +183,13 @@ impl<'a> Editor<'a> {
             f.render_widget(Paragraph::new(slot).style(status_style), status_chunks[0]);
             f.render_widget(Paragraph::new(path).style(status_style), status_chunks[1]);
             f.render_widget(Paragraph::new(cursor).style(status_style), status_chunks[2]);
+
+            f.set_cursor_position(
+                buffer
+                    .textarea
+                    .viewport
+                    .terminal_cursor_position(buffer.textarea.cursor()),
+            );
         })?;
 
         Ok(())

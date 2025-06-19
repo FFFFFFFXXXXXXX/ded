@@ -6,18 +6,17 @@ use ratatui::widgets::{Paragraph, Widget};
 use regex::Regex;
 
 use std::io::BufRead;
-use std::num::NonZeroU8;
-use std::{fs, io};
+use std::{cmp, fs, io};
 
 use crate::editor::cursor::CursorPosition;
 use crate::editor::history::HistoryAction;
 use crate::editor::viewport::Viewport;
-use crate::input::Input;
+use crate::input::{Input, Key};
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct TextArea {
     lines: Vec<String>,
-    viewport: Viewport,
+    pub viewport: Viewport,
     cursor_start: CursorPosition,
     cursor_end: Option<CursorPosition>,
 
@@ -26,6 +25,21 @@ pub struct TextArea {
     search: Option<Regex>,
 
     indent: Indent,
+}
+
+impl Default for TextArea {
+    fn default() -> Self {
+        Self {
+            lines: vec![String::new()],
+            viewport: Default::default(),
+            cursor_start: Default::default(),
+            cursor_end: Default::default(),
+            history: Default::default(),
+            clipboard: Default::default(),
+            search: Default::default(),
+            indent: Default::default(),
+        }
+    }
 }
 
 impl TextArea {
@@ -53,9 +67,7 @@ impl TextArea {
                                     break;
                                 }
                             }
-                            indent = Some(Indent::Spaces(
-                                NonZeroU8::new(spaces).unwrap_or(NonZeroU8::new(4).unwrap()),
-                            ));
+                            indent = Some(spaces.into());
                         }
                     }
 
@@ -75,7 +87,22 @@ impl TextArea {
             lines.push(String::new());
         }
 
-        Ok(Self { lines, ..Default::default() })
+        Ok(Self {
+            lines,
+            indent: indent.unwrap_or_default(),
+            ..Default::default()
+        })
+    }
+
+    pub fn input(&mut self, input: Input) -> bool {
+        match input {
+            Input { key: Key::Up, .. } => self.cursor_start.row = self.cursor_start.row.saturating_sub(1),
+            Input { key: Key::Down, .. } => self.cursor_start.row = self.cursor_start.row.saturating_add(1),
+            Input { key: Key::Left, .. } => self.cursor_start.col = self.cursor_start.col.saturating_sub(1),
+            Input { key: Key::Right, .. } => self.cursor_start.col = self.cursor_start.col.saturating_add(1),
+            _ => {}
+        }
+        true
     }
 
     pub fn lines(&self) -> &[String] {
@@ -173,12 +200,26 @@ impl TextArea {
             })
     }
 
-    pub fn input(&self, input: Input) -> bool {
-        true
+    pub fn take_selection(&self) -> Option<&str> {
+        if let Some(cursor_end) = self.cursor_end {
+            if self.cursor_start.row != cursor_end.row {
+                return None;
+            }
+
+            Some(Self::get_char_slice(
+                &self.lines[self.cursor_start.row],
+                self.cursor_start.col,
+                cursor_end.col,
+            ))
+        } else {
+            None
+        }
     }
 
-    pub fn take_selection(&self) -> Option<&str> {
-        todo!()
+    fn get_char_slice(line: &str, col_start: usize, col_end: usize) -> &str {
+        let Some(start) = line.char_indices().nth(col_start).map(|(i, _)| i) else { return "" };
+        let Some(end) = line.char_indices().nth(col_end).map(|(i, _)| i) else { return &line[start..] };
+        &line[start..end]
     }
 }
 
@@ -187,13 +228,12 @@ impl Widget for &TextArea {
     where
         Self: Sized,
     {
-        let (top_left, bottom_right) = self.viewport.rect(area.width, area.height);
+        let (top_left, bottom_right) = self.viewport.rect();
 
-        let lines = self.lines[top_left.row..bottom_right.row].iter().map(|l| {
-            let Some(start) = l.char_indices().nth(top_left.col).map(|(i, _)| i) else { return "" };
-            let Some(end) = l.char_indices().nth(bottom_right.col).map(|(i, _)| i) else { return &l[start..] };
-            &l[start..end]
-        });
+        let lines = self.lines[top_left.row..cmp::min(bottom_right.row, self.lines.len())]
+            .iter()
+            .map(|l| TextArea::get_char_slice(&l, top_left.col, bottom_right.col))
+            .map(|l| l.replace('\t', self.indent.spaces()));
 
         Paragraph::new(Text::from_iter(lines)).render(area, buf);
     }
@@ -202,11 +242,26 @@ impl Widget for &TextArea {
 #[derive(Debug, Clone)]
 pub enum Indent {
     Tabs,
-    Spaces(NonZeroU8),
+    Spaces(String),
+}
+
+impl Indent {
+    fn spaces(&self) -> &str {
+        match self {
+            Indent::Tabs => "    ",
+            Indent::Spaces(spaces) => spaces,
+        }
+    }
 }
 
 impl Default for Indent {
     fn default() -> Self {
-        Self::Spaces(NonZeroU8::new(4).unwrap())
+        4.into()
+    }
+}
+
+impl From<usize> for Indent {
+    fn from(spaces: usize) -> Self {
+        Self::Spaces((0..spaces).map(|_| ' ').collect())
     }
 }
