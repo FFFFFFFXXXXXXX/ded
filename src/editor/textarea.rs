@@ -1,4 +1,9 @@
 use anyhow::Result;
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
+use ratatui::text::Text;
+use ratatui::widgets::{Paragraph, Widget};
+use regex::Regex;
 
 use std::io::BufRead;
 use std::num::NonZeroU8;
@@ -6,21 +11,21 @@ use std::{fs, io};
 
 use crate::editor::cursor::CursorPosition;
 use crate::editor::history::HistoryAction;
-use crate::editor::settings::{Indent, Settings};
 use crate::editor::viewport::Viewport;
+use crate::input::Input;
 
 #[derive(Debug, Clone, Default)]
 pub struct TextArea {
     lines: Vec<String>,
     viewport: Viewport,
-    selection_start: Option<CursorPosition>,
-    cursor: CursorPosition,
+    cursor_start: CursorPosition,
+    cursor_end: Option<CursorPosition>,
 
     history: Vec<HistoryAction>,
     clipboard: String,
-    search: (), // todo
+    search: Option<Regex>,
 
-    settings: Settings,
+    indent: Indent,
 }
 
 impl TextArea {
@@ -70,13 +75,138 @@ impl TextArea {
             lines.push(String::new());
         }
 
-        Ok(Self {
-            lines,
-            settings: Settings {
-                indent: indent.unwrap_or_default(),
-                ..Default::default()
-            },
-            ..Default::default()
-        })
+        Ok(Self { lines, ..Default::default() })
+    }
+
+    pub fn lines(&self) -> &[String] {
+        &self.lines
+    }
+
+    pub fn cursor(&self) -> CursorPosition {
+        self.cursor_start
+    }
+
+    pub fn set_cursor_start(&mut self, cursor: CursorPosition) {
+        if self.is_cursor_valid(cursor) {
+            self.cursor_start = cursor;
+        }
+    }
+
+    pub fn set_cursor_end(&mut self, cursor: Option<CursorPosition>) {
+        if let Some(cursor) = cursor {
+            if self.is_cursor_valid(cursor) {
+                self.cursor_end = Some(cursor);
+            }
+        } else {
+            self.cursor_end = None;
+        }
+    }
+
+    fn is_cursor_valid(&self, CursorPosition { row, col }: CursorPosition) -> bool {
+        row < self.lines.len() && col <= self.lines[row].len()
+    }
+
+    pub fn set_search_pattern(&mut self, pattern: &str) -> Result<()> {
+        match &self.search {
+            Some(r) if r.as_str() == pattern => {}
+            _ if pattern.is_empty() => self.search = None,
+            _ => self.search = Some(Regex::new(pattern)?),
+        }
+        Ok(())
+    }
+
+    pub fn search_forward(&self) -> Option<(CursorPosition, CursorPosition)> {
+        let search_pattern = self.search.as_ref()?;
+
+        let cursor_line = self.lines.get(self.cursor_start.row)?;
+        let lines_after_cursor = self.lines.split_at_checked(self.cursor_start.row + 1)?.1;
+
+        search_pattern
+            .find_at(cursor_line, self.cursor_start.col + 1)
+            .map(|m| (self.cursor_start.row, m, cursor_line))
+            .or_else(|| {
+                lines_after_cursor.iter().enumerate().find_map(|(i, line)| {
+                    search_pattern
+                        .find(line)
+                        .map(|m| (self.cursor_start.row + 1 + i, m, line))
+                })
+            })
+            .map(|(row, m, line)| {
+                let start_col = line[0..m.start()].chars().count();
+                let end_col = start_col + line[m.start()..m.end()].chars().count();
+                (
+                    CursorPosition { row, col: start_col },
+                    CursorPosition { row, col: end_col },
+                )
+            })
+    }
+
+    pub fn search_backward(&self) -> Option<(CursorPosition, CursorPosition)> {
+        let search_pattern = self.search.as_ref()?;
+
+        let cursor_line = self
+            .lines
+            .get(self.cursor_start.row)?
+            .split_at_checked(self.cursor_start.col)?
+            .0;
+        let lines_before_cursor = self.lines.split_at_checked(self.cursor_start.row)?.0;
+
+        search_pattern
+            .find_iter(cursor_line)
+            .last()
+            .map(|m| (self.cursor_start.row, m, cursor_line))
+            .or_else(|| {
+                lines_before_cursor.iter().rev().enumerate().find_map(|(i, line)| {
+                    search_pattern
+                        .find_iter(line)
+                        .last()
+                        .map(|m| (self.cursor_start.row + 1 + i, m, line.as_str()))
+                })
+            })
+            .map(|(row, m, line)| {
+                let start_col = line[0..m.start()].chars().count();
+                let end_col = start_col + line[m.start()..m.end()].chars().count();
+                (
+                    CursorPosition { row, col: start_col },
+                    CursorPosition { row, col: end_col },
+                )
+            })
+    }
+
+    pub fn input(&self, input: Input) -> bool {
+        true
+    }
+
+    pub fn take_selection(&self) -> Option<&str> {
+        todo!()
+    }
+}
+
+impl Widget for &TextArea {
+    fn render(self, area: Rect, buf: &mut Buffer)
+    where
+        Self: Sized,
+    {
+        let (top_left, bottom_right) = self.viewport.rect(area.width, area.height);
+
+        let lines = self.lines[top_left.row..bottom_right.row].iter().map(|l| {
+            let Some(start) = l.char_indices().nth(top_left.col).map(|(i, _)| i) else { return "" };
+            let Some(end) = l.char_indices().nth(bottom_right.col).map(|(i, _)| i) else { return &l[start..] };
+            &l[start..end]
+        });
+
+        Paragraph::new(Text::from_iter(lines)).render(area, buf);
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum Indent {
+    Tabs,
+    Spaces(NonZeroU8),
+}
+
+impl Default for Indent {
+    fn default() -> Self {
+        Self::Spaces(NonZeroU8::new(4).unwrap())
     }
 }

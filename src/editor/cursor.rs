@@ -4,8 +4,8 @@ use std::cmp;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct CursorPosition {
-    row: usize,
-    col: usize,
+    pub row: usize,
+    pub col: usize,
 }
 
 /// Specify how to move the cursor.
@@ -353,14 +353,21 @@ impl CursorMove {
                 Some((row, col))
             }
             InViewport => {
-                let (row_top, col_top, row_bottom, col_bottom) = viewport.position();
+                // let (
+                //     CursorPosition { row: row_top, col: col_top },
+                //     CursorPosition {
+                //         row: row_bottom,
+                //         col: col_bottom,
+                //     },
+                // ) = viewport.rect();
 
-                let row = row.clamp(row_top as usize, row_bottom as usize);
-                let row = cmp::min(row, lines.len() - 1);
-                let col = col.clamp(col_top as usize, col_bottom as usize);
-                let col = fit_col(col, &lines[row]);
+                // let row = row.clamp(row_top as usize, row_bottom as usize);
+                // let row = cmp::min(row, lines.len() - 1);
+                // let col = col.clamp(col_top as usize, col_bottom as usize);
+                // let col = fit_col(col, &lines[row]);
 
-                Some((row, col))
+                // Some((row, col))
+                None
             }
         }
     }

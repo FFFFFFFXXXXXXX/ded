@@ -1,129 +1,63 @@
-use anyhow::{Result, bail};
+use anyhow::Result;
 
-use ratatui::DefaultTerminal;
-use ratatui::layout::{Constraint, Direction, Layout};
-use ratatui::style::{Color, Modifier, Style};
+use crossterm::event::Event;
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::widgets::{Paragraph, Widget};
+use ratatui::{DefaultTerminal, Frame};
 
 use std::borrow::Cow;
-use std::fmt::Display;
-use std::io::{self, BufRead, Write};
+use std::io::{self, Write};
 use std::path::PathBuf;
 use std::{env, fs};
 
-use crate::editor::TextArea;
+use crate::editor::{CursorPosition, TextArea};
 use crate::input::{Input, Key};
+use crate::searchbox::SearchBox;
 
 mod editor;
 mod input;
+mod searchbox;
 
 fn main() -> Result<()> {
     let term = ratatui::init();
-    let result = (|| Editor::new(term, env::args_os().skip(1))?.run())();
+    let result = (|| Editor::new(env::args_os().skip(1))?.run(term))();
     ratatui::restore();
 
     result
 }
 
-struct SearchBox {
-    textarea: TextArea,
-    open: bool,
-}
-
-impl<'a> Default for SearchBox {
-    fn default() -> Self {
-        let mut textarea = TextArea::default();
-        textarea.set_block(Block::default().borders(Borders::ALL).title("Search"));
-        Self { textarea, open: false }
-    }
-}
-
-impl SearchBox {
-    fn open(&mut self) {
-        self.open = true;
-    }
-
-    fn close(&mut self) {
-        self.open = false;
-        // Remove input for next search. Do not recreate `self.textarea` instance to keep undo history so that users can
-        // restore previous input easily.
-        self.textarea.move_cursor(CursorMove::End);
-        self.textarea.delete_line_by_head();
-    }
-
-    fn height(&self) -> u16 {
-        if self.open { 3 } else { 0 }
-    }
-
-    fn input(&mut self, input: Input) -> Option<&'_ str> {
-        match input {
-            Input { key: Key::Enter, .. }
-            | Input {
-                key: Key::Char('m'),
-                ctrl: true,
-                ..
-            } => None, // Disable shortcuts which inserts a newline. See `single_line` example
-            input => {
-                let modified = self.textarea.input(input);
-                modified.then(|| self.textarea.lines()[0].as_str())
-            }
-        }
-    }
-
-    fn set_error(&mut self, err: Option<impl Display>) {
-        let b = if let Some(err) = err {
-            Block::default()
-                .borders(Borders::ALL)
-                .title(format!("Search: {}", err))
-                .style(Style::default().fg(Color::Red))
-        } else {
-            Block::default().borders(Borders::ALL).title("Search")
-        };
-        self.textarea.set_block(b);
-    }
-}
-
-struct Buffer {
-    textarea: TextArea,
+#[derive(Debug, Default)]
+struct Buffer<'a> {
     path: PathBuf,
+    textarea: TextArea,
+    searchbox: SearchBox<'a>,
     modified: bool,
-    search: SearchBox,
 }
 
-impl Buffer {
+impl<'a> Buffer<'a> {
     fn new(path: PathBuf) -> Result<Self> {
-        let mut textarea = if let Ok(md) = path.metadata() {
-            if md.is_file() {
-                let mut textarea = TextArea::new_from_file(&fs::File::open(&path)?)?;
-                if textarea.lines().iter().any(|l| l.starts_with('\t')) {
-                    textarea.set_hard_tab_indent(true);
-                }
-                textarea
-            } else {
-                bail!("{:?} is not a file", path);
-            }
+        let textarea = if path.exists() {
+            TextArea::new_from_file(&fs::File::open(&path)?)?
         } else {
-            TextArea::default() // File does not exist
+            TextArea::default()
         };
-
-        textarea.set_cursor_line_style(Style::default());
-        textarea.set_line_number_style(Style::default().fg(Color::DarkGray));
-        textarea.set_max_histories(100);
 
         Ok(Self {
             textarea,
             path,
-            modified: false,
-            search: SearchBox::default(),
+            ..Default::default()
         })
     }
 
-    fn save(&mut self) -> io::Result<()> {
+    fn save(&mut self) -> Result<()> {
         if !self.modified {
             return Ok(());
         }
+
         let mut f = io::BufWriter::new(fs::File::create(&self.path)?);
+
         let lines = self.textarea.lines();
         for line in lines.iter().take(lines.len() - 1) {
             f.write_all(line.as_bytes())?;
@@ -142,16 +76,20 @@ impl Buffer {
     }
 }
 
-struct Editor {
-    term: DefaultTerminal,
-    current: usize,
-    buffers: Vec<Buffer>,
-    message: Option<Cow<'static, str>>,
-    search: SearchBox,
+#[derive(PartialEq, Eq)]
+enum Status {
+    Continue,
+    Stop,
 }
 
-impl Editor {
-    fn new<I>(term: DefaultTerminal, paths: I) -> Result<Self>
+struct Editor<'a> {
+    buffers: Vec<Buffer<'a>>,
+    current: usize,
+    message: Option<Cow<'static, str>>,
+}
+
+impl<'a> Editor<'a> {
+    fn new<I>(paths: I) -> Result<Self>
     where
         I: Iterator,
         I::Item: Into<PathBuf>,
@@ -162,178 +100,193 @@ impl Editor {
         }
 
         Ok(Self {
-            current: 0,
             buffers,
-            term,
+            current: 0,
             message: None,
-            search: SearchBox::default(),
         })
     }
 
-    fn run(&mut self) -> Result<()> {
+    fn run(&mut self, mut terminal: DefaultTerminal) -> Result<()> {
         loop {
-            let search_height = self.search.height();
-            let layout = Layout::default().direction(Direction::Vertical).constraints(
-                [
-                    Constraint::Length(search_height),
-                    Constraint::Min(1),
-                    Constraint::Length(1),
-                    Constraint::Length(1),
-                ]
-                .as_ref(),
-            );
+            // render state to terminal
+            self.render(&mut terminal)?;
 
-            self.term.draw(|f| {
-                let chunks = layout.split(f.area());
+            // wait for next userinput (blocking!)
+            let event = crossterm::event::read()?;
+            // manually re-render on window resize because Event::Resize(_, _) gets ignored by tui_textarea
+            if let Event::Resize(_, _) = event {
+                self.render(&mut terminal)?;
+            }
 
-                if search_height > 0 {
-                    f.render_widget(&self.search.textarea, chunks[0]);
-                }
+            let event = event.into();
+            // ignore Key::Null so we don't rerender unnecessarily
+            if let Input { key: Key::Null, .. } = event {
+                continue;
+            }
 
-                let buffer = &self.buffers[self.current];
-                let textarea = &buffer.textarea;
-                f.render_widget(textarea, chunks[1]);
-
-                // Render status line
-                let modified = if buffer.modified { " [modified]" } else { "" };
-                let slot = format!("[{}/{}]", self.current + 1, self.buffers.len());
-                let path = format!(" {}{} ", buffer.path.display(), modified);
-                let (row, col) = textarea.cursor();
-                let cursor = format!("({},{})", row + 1, col + 1);
-                let status_chunks = Layout::default()
-                    .direction(Direction::Horizontal)
-                    .constraints(
-                        [
-                            Constraint::Length(slot.len() as u16),
-                            Constraint::Min(1),
-                            Constraint::Length(cursor.len() as u16),
-                        ]
-                        .as_ref(),
-                    )
-                    .split(chunks[2]);
-                let status_style = Style::default().add_modifier(Modifier::REVERSED);
-                f.render_widget(Paragraph::new(slot).style(status_style), status_chunks[0]);
-                f.render_widget(Paragraph::new(path).style(status_style), status_chunks[1]);
-                f.render_widget(Paragraph::new(cursor).style(status_style), status_chunks[2]);
-
-                // Render message at bottom
-                let message = if let Some(message) = self.message.take() {
-                    Line::from(Span::raw(message))
-                } else if search_height > 0 {
-                    Line::from(vec![
-                        Span::raw("Press "),
-                        Span::styled("Enter", Style::default().add_modifier(Modifier::BOLD)),
-                        Span::raw(" to jump to first match and close, "),
-                        Span::styled("Esc", Style::default().add_modifier(Modifier::BOLD)),
-                        Span::raw(" to close, "),
-                        Span::styled("^G or ↓ or ^N", Style::default().add_modifier(Modifier::BOLD)),
-                        Span::raw(" to search next, "),
-                        Span::styled("M-G or ↑ or ^P", Style::default().add_modifier(Modifier::BOLD)),
-                        Span::raw(" to search previous"),
-                    ])
-                } else {
-                    Line::from(vec![
-                        Span::raw("Press "),
-                        Span::styled("^Q", Style::default().add_modifier(Modifier::BOLD)),
-                        Span::raw(" to quit, "),
-                        Span::styled("^S", Style::default().add_modifier(Modifier::BOLD)),
-                        Span::raw(" to save, "),
-                        Span::styled("^G", Style::default().add_modifier(Modifier::BOLD)),
-                        Span::raw(" to search, "),
-                        Span::styled("^T", Style::default().add_modifier(Modifier::BOLD)),
-                        Span::raw(" to switch buffer"),
-                    ])
-                };
-                f.render_widget(Paragraph::new(message), chunks[3]);
-            })?;
-
-            if search_height > 0 {
-                let textarea = &mut self.buffers[self.current].textarea;
-                match crossterm::event::read()?.into() {
-                    Input {
-                        key: Key::Char('g' | 'n'),
-                        ctrl: true,
-                        alt: false,
-                        ..
-                    }
-                    | Input { key: Key::Down, .. } => {
-                        if !textarea.search_forward(false) {
-                            self.search.set_error(Some("Pattern not found"));
-                        }
-                    }
-                    Input {
-                        key: Key::Char('g'),
-                        ctrl: false,
-                        alt: true,
-                        ..
-                    }
-                    | Input {
-                        key: Key::Char('p'),
-                        ctrl: true,
-                        alt: false,
-                        ..
-                    }
-                    | Input { key: Key::Up, .. } => {
-                        if !textarea.search_back(false) {
-                            self.search.set_error(Some("Pattern not found"));
-                        }
-                    }
-                    Input { key: Key::Enter, .. } => {
-                        if !textarea.search_forward(true) {
-                            self.message = Some("Pattern not found".into());
-                        }
-                        self.search.close();
-                        textarea.set_search_pattern("").unwrap();
-                    }
-                    Input { key: Key::Esc, .. } => {
-                        self.search.close();
-                        textarea.set_search_pattern("").unwrap();
-                    }
-                    input => {
-                        if let Some(query) = self.search.input(input) {
-                            let maybe_err = textarea.set_search_pattern(query).err();
-                            self.search.set_error(maybe_err);
-                        }
-                    }
-                }
-            } else {
-                match crossterm::event::read()?.into() {
-                    Input {
-                        key: Key::Char('q'),
-                        ctrl: true,
-                        ..
-                    } => break,
-                    Input {
-                        key: Key::Char('t'),
-                        ctrl: true,
-                        ..
-                    } => {
-                        self.current = (self.current + 1) % self.buffers.len();
-                        self.message = Some(format!("Switched to buffer #{}", self.current + 1).into());
-                    }
-                    Input {
-                        key: Key::Char('s'),
-                        ctrl: true,
-                        ..
-                    } => {
-                        self.buffers[self.current].save()?;
-                        self.message = Some("Saved!".into());
-                    }
-                    Input {
-                        key: Key::Char('g'),
-                        ctrl: true,
-                        ..
-                    } => {
-                        self.search.open();
-                    }
-                    input => {
-                        let buffer = &mut self.buffers[self.current];
-                        buffer.modified |= buffer.textarea.input(input);
-                    }
-                }
+            // process input / change state
+            if self.process_input(event)? == Status::Stop {
+                break;
             }
         }
 
         Ok(())
+    }
+
+    fn render(&mut self, terminal: &mut DefaultTerminal) -> Result<()> {
+        terminal.draw(|f| {
+            let buffer = &self.buffers[self.current];
+            let num_buffers = self.buffers.len();
+
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Length(if buffer.searchbox.is_open() { 3 } else { 0 }),
+                    Constraint::Min(1),
+                    Constraint::Length(1),
+                ])
+                .split(f.area());
+
+            if buffer.searchbox.is_open() {
+                f.render_widget(&buffer.searchbox, chunks[0]);
+            }
+
+            f.render_widget(&buffer.textarea, chunks[1]);
+
+            // Render status line
+            let modified = if buffer.modified { " [modified]" } else { "" };
+            let slot = format!("[{}/{}]", self.current + 1, num_buffers);
+            let path = format!(" {}{} ", buffer.path.display(), modified);
+            let CursorPosition { row, col } = buffer.textarea.cursor();
+            let cursor = format!("({},{})", row + 1, col + 1);
+            let status_chunks = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints(
+                    [
+                        Constraint::Length(slot.len().try_into().unwrap()),
+                        Constraint::Min(1),
+                        Constraint::Length(cursor.len().try_into().unwrap()),
+                    ]
+                    .as_ref(),
+                )
+                .split(chunks[2]);
+            let status_style = Style::default().add_modifier(Modifier::REVERSED);
+            f.render_widget(Paragraph::new(slot).style(status_style), status_chunks[0]);
+            f.render_widget(Paragraph::new(path).style(status_style), status_chunks[1]);
+            f.render_widget(Paragraph::new(cursor).style(status_style), status_chunks[2]);
+        })?;
+
+        Ok(())
+    }
+
+    fn process_input(&mut self, event: Input) -> Result<Status> {
+        let buffer = &mut self.buffers[self.current];
+
+        match event {
+            Input {
+                key: Key::Char('q'),
+                ctrl: true,
+                alt: false,
+                shift: false,
+            } => return Ok(Status::Stop),
+            Input {
+                key: Key::Char(char),
+                alt: true,
+                ctrl: false,
+                shift: false,
+            } if char.is_ascii_digit() => {
+                let buf_idx = char.to_digit(10).unwrap().saturating_sub(1).try_into().unwrap();
+                if buf_idx < self.buffers.len() {
+                    self.current = buf_idx;
+                }
+            }
+            Input {
+                key: Key::Char('s'),
+                ctrl: true,
+                ..
+            } => {
+                buffer.save()?;
+                self.message = Some("Saved!".into());
+            }
+            event => {
+                if buffer.searchbox.is_open() {
+                    self.process_searchbox_input(event);
+                } else {
+                    self.process_textarea_input(event);
+                }
+            }
+        };
+
+        Ok(Status::Continue)
+    }
+
+    fn process_searchbox_input(&mut self, event: Input) {
+        let buffer = &mut self.buffers[self.current];
+
+        match event {
+            Input { key: Key::Down, .. } => {
+                if buffer.textarea.search_forward().is_some() {
+                    buffer.searchbox.set_error_message(None::<&'static str>);
+                } else {
+                    buffer.searchbox.set_error_message(Some("not found"));
+                }
+            }
+            Input { key: Key::Up, .. } => {
+                if buffer.textarea.search_backward().is_some() {
+                    buffer.searchbox.set_error_message(None::<&'static str>);
+                } else {
+                    buffer.searchbox.set_error_message(Some("not found"));
+                }
+            }
+            Input { key: Key::Enter, .. } => {
+                if let Some((cursor_start, cursor_end)) = buffer.textarea.search_forward() {
+                    buffer.textarea.set_cursor_start(cursor_start);
+                    buffer.textarea.set_cursor_end(Some(cursor_end));
+                } else {
+                    buffer.searchbox.set_error_message(Some("not found"));
+                }
+                buffer.searchbox.close();
+                buffer.textarea.set_search_pattern("").unwrap();
+            }
+            Input { key: Key::Esc, .. } => {
+                buffer.searchbox.close();
+                buffer.textarea.set_search_pattern("").unwrap();
+            }
+            input => {
+                if let Some(query) = buffer.searchbox.input(input) {
+                    let maybe_err = buffer.textarea.set_search_pattern(query).err();
+                    buffer.searchbox.set_error_message(maybe_err);
+                }
+            }
+        }
+    }
+
+    fn process_textarea_input(&mut self, event: Input) {
+        let buffer = &mut self.buffers[self.current];
+
+        match event {
+            Input {
+                key: Key::Char('f'),
+                ctrl: true,
+                ..
+            } => {
+                let search_pattern = {
+                    let prev_search_pattern = buffer.searchbox.open();
+                    buffer
+                        .textarea
+                        .take_selection()
+                        .unwrap_or(prev_search_pattern)
+                        .to_owned()
+                };
+
+                buffer.searchbox.set_pattern(&search_pattern);
+                let maybe_err = buffer.textarea.set_search_pattern(&search_pattern).err();
+                buffer.searchbox.set_error_message(maybe_err);
+            }
+            input => {
+                let buffer = &mut self.buffers[self.current];
+                buffer.modified |= buffer.textarea.input(input);
+            }
+        }
     }
 }
