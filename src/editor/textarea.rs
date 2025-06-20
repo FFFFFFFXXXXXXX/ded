@@ -96,12 +96,26 @@ impl TextArea {
 
     pub fn input(&mut self, input: Input) -> bool {
         match input {
-            Input { key: Key::Up, .. } => self.cursor_start.row = self.cursor_start.row.saturating_sub(1),
-            Input { key: Key::Down, .. } => self.cursor_start.row = self.cursor_start.row.saturating_add(1),
-            Input { key: Key::Left, .. } => self.cursor_start.col = self.cursor_start.col.saturating_sub(1),
-            Input { key: Key::Right, .. } => self.cursor_start.col = self.cursor_start.col.saturating_add(1),
+            Input { key: Key::Up, .. } => {
+                self.cursor_start.row = self.cursor_start.row.saturating_sub(1);
+                self.viewport.update_view(self.cursor_start);
+            }
+            Input { key: Key::Down, .. } => {
+                self.cursor_start.row = self.cursor_start.row.saturating_add(1);
+                self.viewport.update_view(self.cursor_start);
+            }
+            Input { key: Key::Left, .. } => {
+                self.cursor_start.col = self.cursor_start.col.saturating_sub(1);
+                self.viewport.update_view(self.cursor_start);
+            }
+            Input { key: Key::Right, .. } => {
+                self.cursor_start.col = self.cursor_start.col.saturating_add(1);
+                self.viewport.update_view(self.cursor_start);
+            }
+            Input { key: Key::Home, .. } => self.cursor_start.col = 0,
             _ => {}
         }
+
         true
     }
 
@@ -117,6 +131,7 @@ impl TextArea {
         if self.is_cursor_valid(cursor) {
             self.cursor_start = cursor;
         }
+        self.viewport.update_view(cursor);
     }
 
     pub fn set_cursor_end(&mut self, cursor: Option<CursorPosition>) {

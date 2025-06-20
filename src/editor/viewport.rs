@@ -32,15 +32,24 @@ impl Viewport {
         )
     }
 
+    pub fn update_view(&mut self, cursor: CursorPosition) {
+        if cursor.row >= self.position.row.saturating_add(self.height) {
+            self.position.row = cursor.row.saturating_sub(self.height - 1);
+        } else if cursor.row < self.position.row {
+            self.position.row = cursor.row;
+        }
+
+        if cursor.col >= self.position.col.saturating_add(self.width) {
+            self.position.col = cursor.col.saturating_sub(self.width - 1);
+        } else if cursor.col < self.position.col {
+            self.position.col = cursor.col;
+        }
+    }
+
     pub fn terminal_cursor_position(&self, cursor: CursorPosition) -> Position {
         Position {
             x: (cursor.col - self.position.col).try_into().unwrap(),
             y: (cursor.row - self.position.row).try_into().unwrap(),
         }
     }
-
-    // pub fn scroll(&mut self, rows: i64, cols: i64) {
-    //     self.row.set(self.row.get().saturating_add_signed(rows));
-    //     self.col.set(self.col.get().saturating_add_signed(cols));
-    // }
 }

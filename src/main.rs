@@ -106,9 +106,6 @@ impl<'a> Editor<'a> {
     }
 
     fn run(&mut self, mut terminal: DefaultTerminal) -> Result<()> {
-        let terminal_size = terminal.size()?;
-        self.update_terminal_size(terminal_size.width, terminal_size.height);
-
         loop {
             // render state to terminal
             self.render(&mut terminal)?;
@@ -117,7 +114,6 @@ impl<'a> Editor<'a> {
             let event = crossterm::event::read()?;
             // manually re-render on window resize because Event::Resize(_, _) gets ignored by tui_textarea
             if let Event::Resize(width, height) = event {
-                self.update_terminal_size(width, height);
                 self.render(&mut terminal)?;
             }
 
@@ -136,16 +132,10 @@ impl<'a> Editor<'a> {
         Ok(())
     }
 
-    fn update_terminal_size(&mut self, width: u16, height: u16) {
-        for buffer in &mut self.buffers {
-            buffer.textarea.viewport.update_size(width, height)
-        }
-    }
-
     fn render(&mut self, terminal: &mut DefaultTerminal) -> Result<()> {
         terminal.draw(|f| {
-            let buffer = &self.buffers[self.current];
             let num_buffers = self.buffers.len();
+            let buffer = &mut self.buffers[self.current];
 
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
@@ -155,6 +145,8 @@ impl<'a> Editor<'a> {
                     Constraint::Length(1),
                 ])
                 .split(f.area());
+
+            buffer.textarea.viewport.update_size(chunks[1].width, chunks[1].height);
 
             if buffer.searchbox.is_open() {
                 f.render_widget(&buffer.searchbox, chunks[0]);
@@ -167,7 +159,7 @@ impl<'a> Editor<'a> {
             let slot = format!("[{}/{}]", self.current + 1, num_buffers);
             let path = format!(" {}{} ", buffer.path.display(), modified);
             let CursorPosition { row, col } = buffer.textarea.cursor();
-            let cursor = format!("({},{})", row + 1, col + 1);
+            let cursor = format!("({},{})", row, col);
             let status_chunks = Layout::default()
                 .direction(Direction::Horizontal)
                 .constraints(
