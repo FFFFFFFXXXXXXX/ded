@@ -1,5 +1,3 @@
-use std::cmp;
-
 use ratatui::layout::Position;
 
 use crate::editor::CursorPosition;
@@ -12,38 +10,33 @@ pub struct Viewport {
 }
 
 impl Viewport {
-    pub fn update_size(&mut self, width: u16, height: u16) {
-        self.width = width.into();
-        self.height = height.into();
+    pub fn update_size(&mut self, width: usize, height: usize) {
+        self.width = width;
+        self.height = height;
     }
 
     pub fn rect(&self) -> (CursorPosition, CursorPosition) {
-        let CursorPosition { row: row_top, col: col_top } = self.position;
-
-        let row_bottom = row_top.saturating_add(self.height).saturating_sub(1);
-        let col_bottom = col_top.saturating_add(self.width).saturating_sub(1);
-
         (
-            CursorPosition { row: row_top, col: col_top },
             CursorPosition {
-                row: cmp::max(row_top, row_bottom),
-                col: cmp::max(col_top, col_bottom),
+                row: self.position.row,
+                col: self.position.col,
+            },
+            CursorPosition {
+                row: self.position.row.saturating_add(self.height),
+                col: self.position.col.saturating_add(self.width),
             },
         )
     }
 
     pub fn update_view(&mut self, cursor: CursorPosition) {
-        if cursor.row >= self.position.row.saturating_add(self.height) {
-            self.position.row = cursor.row.saturating_sub(self.height - 1);
-        } else if cursor.row < self.position.row {
-            self.position.row = cursor.row;
-        }
-
-        if cursor.col >= self.position.col.saturating_add(self.width) {
-            self.position.col = cursor.col.saturating_sub(self.width - 1);
-        } else if cursor.col < self.position.col {
-            self.position.col = cursor.col;
-        }
+        self.position.row = self
+            .position
+            .row
+            .clamp(cursor.row.saturating_sub(self.height - 1), cursor.row);
+        self.position.col = self
+            .position
+            .col
+            .clamp(cursor.col.saturating_sub(self.width), cursor.col);
     }
 
     pub fn terminal_cursor_position(&self, cursor: CursorPosition) -> Position {

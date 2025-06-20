@@ -1,5 +1,6 @@
 mod cursor;
 mod history;
+mod indent;
 mod textarea;
 mod viewport;
 mod word;
