@@ -150,12 +150,13 @@ impl<'a> Editor<'a> {
                 f.render_widget(&buffer.searchbox, chunks[0]);
             }
 
-            let textarea_chunks = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([Constraint::Min(1), Constraint::Length(1)])
-                .split(chunks[1])[0];
-            buffer.textarea.update_viewport_size(textarea_chunks);
-            f.render_widget(&buffer.textarea, textarea_chunks);
+            f.render_widget(
+                &buffer.textarea,
+                Layout::default()
+                    .direction(Direction::Horizontal)
+                    .constraints([Constraint::Min(1), Constraint::Length(1)])
+                    .split(chunks[1])[0],
+            );
 
             // Render status line
             let modified = if buffer.modified { " [modified]" } else { "" };
@@ -180,7 +181,6 @@ impl<'a> Editor<'a> {
             f.render_widget(Paragraph::new(cursor).style(status_style), status_chunks[2]);
 
             f.set_cursor_position(buffer.textarea.get_display_cursor_position());
-            // f.set_cursor_position(ratatui::layout::Position { x: 122, y: 0 });
         })?;
 
         Ok(())

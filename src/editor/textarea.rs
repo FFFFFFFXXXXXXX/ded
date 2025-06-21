@@ -1,7 +1,8 @@
 use anyhow::Result;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
-use ratatui::text::Text;
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Paragraph, Widget};
 use regex::Regex;
 
@@ -181,7 +182,9 @@ impl TextArea {
     }
 
     pub fn get_display_cursor_position(&self) -> Position {
-        self.viewport.terminal_cursor_position(self.cursor_start)
+        let mut cursor_position = self.viewport.terminal_cursor_position(self.cursor_start);
+        cursor_position.x += u16::from(num_digits(self.lines.len())) + 1;
+        cursor_position
     }
 
     pub fn take_selection(&self) -> Option<&str> {
@@ -277,10 +280,10 @@ impl TextArea {
     }
 }
 
-// viewport
+// render Widget
 impl TextArea {
-    pub fn update_viewport_size(&mut self, area: Rect) {
-        self.viewport.update_size(area.width.into(), area.height.into());
+    fn render_line(&self, line: String, line_info: LineNumber) -> Line {
+        Line::from(vec![Span::from(line_info), Span::from(line)])
     }
 }
 
@@ -289,13 +292,66 @@ impl Widget for &TextArea {
     where
         Self: Sized,
     {
-        let (top_left, bottom_right) = self.viewport.rect();
+        let (top_left, bottom_right) = self.viewport.update_size(area.width.into(), area.height.into());
 
-        let lines = self.lines[cmp::min(top_left.row, self.lines.len())..cmp::min(bottom_right.row, self.lines.len())]
+        let start = cmp::min(top_left.row, self.lines.len());
+        let end = cmp::min(bottom_right.row, self.lines.len());
+
+        let line_number_len = num_digits(self.lines.len());
+
+        let lines = self.lines[start..end]
             .iter()
-            .map(|line| TextArea::get_char_slice(line, top_left.col, bottom_right.col))
-            .map(|line| line.replace('\t', self.indent.spaces()));
+            .map(|line| TextArea::get_char_slice(line, top_left.col, bottom_right.col - usize::from(line_number_len)))
+            .map(|line| line.replace('\t', self.indent.spaces()))
+            .zip((start..end).into_iter())
+            .map(|(line, line_number)| {
+                self.render_line(
+                    line,
+                    LineNumber {
+                        line_number,
+                        line_number_len,
+                        current_line: line_number == self.cursor().row,
+                    },
+                )
+            });
 
         Paragraph::new(Text::from_iter(lines)).render(area, buf);
     }
+}
+
+struct LineNumber {
+    line_number: usize,
+    line_number_len: u8,
+    current_line: bool,
+}
+
+impl From<LineNumber> for Span<'_> {
+    fn from(value: LineNumber) -> Self {
+        const LINE_NUMBER_STYLE_SELECTED: Style = Style::new().fg(Color::DarkGray);
+        const LINE_NUMBER_STYLE: Style = LINE_NUMBER_STYLE_SELECTED.add_modifier(Modifier::DIM);
+
+        Span::styled(
+            format!(
+                "{}{} ",
+                spaces(value.line_number_len - num_digits(value.line_number)),
+                value.line_number
+            ),
+            if value.current_line {
+                LINE_NUMBER_STYLE_SELECTED
+            } else {
+                LINE_NUMBER_STYLE
+            },
+        )
+    }
+}
+
+pub fn num_digits(i: usize) -> u8 {
+    const { assert!(usize::ilog10(usize::MAX) <= (u8::MAX as u32)) }
+
+    (usize::ilog10(i + 1) + 1) as u8
+}
+
+pub fn spaces(size: u8) -> &'static str {
+    const SPACES: &str = "                                                                                                                                                                                                                                                                ";
+    &SPACES[..size.into()]
 }
