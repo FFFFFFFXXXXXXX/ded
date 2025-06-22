@@ -9,10 +9,10 @@ use regex::Regex;
 use std::io::BufRead;
 use std::{cmp, fs, io};
 
-use crate::editor::cursor::CursorPosition;
-use crate::editor::history::HistoryAction;
-use crate::editor::indent::Indent;
-use crate::editor::viewport::Viewport;
+use super::cursor::CursorPosition;
+use super::history::HistoryAction;
+use super::indent::Indent;
+use super::viewport::Viewport;
 use crate::input::{Input, Key};
 
 #[derive(Debug, Clone)]
@@ -303,7 +303,7 @@ impl Widget for &TextArea {
             .iter()
             .map(|line| TextArea::get_char_slice(line, top_left.col, bottom_right.col - usize::from(line_number_len)))
             .map(|line| line.replace('\t', self.indent.spaces()))
-            .zip((start..end).into_iter())
+            .zip(start..end)
             .map(|(line, line_number)| {
                 self.render_line(
                     line,

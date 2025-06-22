@@ -11,13 +11,13 @@ use std::io::{self, Write};
 use std::path::PathBuf;
 use std::{env, fs};
 
-use crate::editor::{CursorPosition, TextArea};
 use crate::input::{Input, Key};
 use crate::searchbox::SearchBox;
+use crate::textarea::{CursorPosition, TextArea};
 
-mod editor;
 mod input;
 mod searchbox;
+mod textarea;
 
 fn main() -> Result<()> {
     let term = ratatui::init();

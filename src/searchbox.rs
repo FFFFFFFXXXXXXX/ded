@@ -8,8 +8,8 @@ use ratatui::{
 };
 
 use crate::{
-    editor::TextArea,
     input::{Input, Key},
+    textarea::TextArea,
 };
 
 #[derive(Debug)]

@@ -2,7 +2,7 @@ use std::cell::Cell;
 
 use ratatui::layout::Position;
 
-use crate::editor::CursorPosition;
+use super::CursorPosition;
 
 #[derive(Default, Debug, Clone)]
 pub struct Viewport {
