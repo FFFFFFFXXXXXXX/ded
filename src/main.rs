@@ -163,7 +163,8 @@ impl<'a> Editor<'a> {
             let slot = format!("[{}/{}]", self.current + 1, num_buffers);
             let path = format!(" {}{} ", buffer.path.display(), modified);
             let CursorPosition { row, col } = buffer.textarea.cursor();
-            let cursor = format!("({},{})", row, col);
+            let CursorPosition { row: row_s, col: col_s } = buffer.textarea.selection.unwrap_or_default();
+            let cursor = format!("({},{}) ({},{})", row, col, row_s, col_s);
             let status_chunks = Layout::default()
                 .direction(Direction::Horizontal)
                 .constraints(
