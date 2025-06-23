@@ -1,20 +1,16 @@
 use std::fmt::Display;
 
-use ratatui::{
-    buffer::Buffer,
-    layout::Rect,
-    style::{Color, Style},
-    widgets::{Block, Borders, Widget},
-};
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
+use ratatui::style::{Color, Style};
+use ratatui::widgets::{Block, Borders, Widget};
 
-use crate::{
-    input::{Input, Key},
-    textarea::TextArea,
-};
+use crate::input::{Input, Key};
+use crate::textarea::TextArea;
 
 #[derive(Debug)]
 pub struct SearchBox<'a> {
-    textarea: TextArea,
+    pub textarea: TextArea,
     border_block: Block<'a>,
     open: bool,
 }
@@ -22,7 +18,7 @@ pub struct SearchBox<'a> {
 impl<'a> Default for SearchBox<'a> {
     fn default() -> Self {
         Self {
-            textarea: TextArea::default(),
+            textarea: TextArea::new_with_line_numbers(false),
             border_block: Block::default().borders(Borders::ALL).title(" Search: "),
             open: false,
         }
@@ -65,8 +61,7 @@ impl<'a> SearchBox<'a> {
     }
 
     pub fn set_pattern(&mut self, pattern: &str) {
-        // self.textarea.delete_line(false);
-        // self.textarea.insert_str(pattern);
+        // self.textarea.
     }
 }
 

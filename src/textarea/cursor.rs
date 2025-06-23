@@ -341,8 +341,7 @@ impl CursorMove {
             }
             ParagraphForward => {
                 let mut prev_is_empty = lines[row].is_empty();
-                for row in row + 1..lines.len() {
-                    let line = &lines[row];
+                for (row, line) in lines.iter().enumerate().skip(row + 1) {
                     let is_empty = line.is_empty();
                     if !is_empty && prev_is_empty {
                         return Some((row, fit_col(col, line)));

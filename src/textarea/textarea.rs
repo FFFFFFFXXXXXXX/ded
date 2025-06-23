@@ -7,6 +7,7 @@ use ratatui::widgets::{Paragraph, Widget};
 use regex::Regex;
 
 use std::io::BufRead;
+use std::num::NonZeroU8;
 use std::{cmp, fs, io};
 
 use super::cursor::CursorPosition;
@@ -20,13 +21,14 @@ pub struct TextArea {
     lines: Vec<String>,
     viewport: Viewport,
     cursor: CursorPosition,
-    pub selection: Option<CursorPosition>,
+    selection: Option<CursorPosition>,
 
     history: Vec<HistoryAction>,
     clipboard: String,
-    search: Option<Regex>,
+    search_pattern: Option<Regex>,
 
     indent: Indent,
+    line_numbers: bool,
 }
 
 impl Default for TextArea {
@@ -38,13 +40,21 @@ impl Default for TextArea {
             selection: Default::default(),
             history: Default::default(),
             clipboard: Default::default(),
-            search: Default::default(),
+            search_pattern: Default::default(),
             indent: Default::default(),
+            line_numbers: true,
         }
     }
 }
 
 impl TextArea {
+    pub fn new_with_line_numbers(line_numbers: bool) -> Self {
+        Self {
+            line_numbers,
+            ..Default::default()
+        }
+    }
+
     pub fn new_from_file(file: &fs::File) -> Result<Self> {
         let mut file_reader = io::BufReader::new(file);
 
@@ -96,14 +106,6 @@ impl TextArea {
         })
     }
 
-    pub fn lines(&self) -> &[String] {
-        &self.lines
-    }
-
-    pub fn cursor(&self) -> CursorPosition {
-        self.cursor
-    }
-
     pub fn input(&mut self, input: Input) -> bool {
         match input {
             Input {
@@ -114,10 +116,11 @@ impl TextArea {
             } => {
                 if self.cursor.row > 0 {
                     self.handle_selection(shift);
-                    self.cursor.row = self.cursor.row - 1;
+                    self.cursor.row -= 1;
                     self.cursor.col = self.cursor.col.min(self.lines[self.cursor.row].len());
                     self.viewport.update_view(self.cursor);
                 }
+                false
             }
             Input {
                 key: Key::Down,
@@ -127,65 +130,72 @@ impl TextArea {
             } => {
                 if self.cursor.row < self.lines.len() - 1 {
                     self.handle_selection(shift);
-                    self.cursor.row = self.cursor.row + 1;
+                    self.cursor.row += 1;
                     self.cursor.col = self.cursor.col.min(self.lines[self.cursor.row].len());
                     self.viewport.update_view(self.cursor);
                 }
+                false
             }
             Input {
                 key: Key::Left,
                 shift,
                 alt: false,
                 ctrl: false,
-            } => match self.selection {
-                Some(selection) if !shift => {
-                    if self.cursor > selection {
-                        self.cursor = selection;
+            } => {
+                match self.selection {
+                    Some(selection) if !shift => {
+                        if self.cursor > selection {
+                            self.cursor = selection;
+                        }
+                        self.handle_selection(shift);
                     }
-                    self.handle_selection(shift);
-                }
-                _ => {
-                    if self.cursor.col == 0 {
-                        if self.cursor.row > 0 {
+                    _ => {
+                        if self.cursor.col == 0 {
+                            if self.cursor.row > 0 {
+                                self.handle_selection(shift);
+                                self.cursor.row -= 1;
+                                self.cursor.col = self.lines[self.cursor.row].len();
+                                self.viewport.update_view(self.cursor);
+                            }
+                        } else {
                             self.handle_selection(shift);
-                            self.cursor.row = self.cursor.row - 1;
-                            self.cursor.col = self.lines[self.cursor.row].len();
+                            self.cursor.col -= 1;
                             self.viewport.update_view(self.cursor);
                         }
-                    } else {
-                        self.handle_selection(shift);
-                        self.cursor.col = self.cursor.col - 1;
-                        self.viewport.update_view(self.cursor);
                     }
-                }
-            },
+                };
+                false
+            }
             Input {
                 key: Key::Right,
                 shift,
                 alt: false,
                 ctrl: false,
-            } => match self.selection {
-                Some(selection) if !shift => {
-                    if self.cursor < selection {
-                        self.cursor = selection;
+            } => {
+                match self.selection {
+                    Some(selection) if !shift => {
+                        if self.cursor < selection {
+                            self.cursor = selection;
+                        }
+                        self.handle_selection(shift);
                     }
-                    self.handle_selection(shift);
-                }
-                _ => {
-                    if self.cursor.col == self.lines[self.cursor.row].len() {
-                        if self.cursor.row < self.lines.len() - 1 {
+                    _ => {
+                        if self.cursor.col == self.lines[self.cursor.row].len() {
+                            if self.cursor.row < self.lines.len() - 1 {
+                                self.handle_selection(shift);
+                                self.cursor.row += 1;
+                                self.cursor.col = 0;
+                                self.viewport.update_view(self.cursor);
+                            }
+                        } else {
                             self.handle_selection(shift);
-                            self.cursor.row = self.cursor.row + 1;
-                            self.cursor.col = 0;
+                            self.cursor.col += 1;
                             self.viewport.update_view(self.cursor);
                         }
-                    } else {
-                        self.handle_selection(shift);
-                        self.cursor.col = self.cursor.col + 1;
-                        self.viewport.update_view(self.cursor);
                     }
-                }
-            },
+                };
+                false
+            }
             Input {
                 key: Key::Home,
                 shift,
@@ -195,6 +205,7 @@ impl TextArea {
                 self.handle_selection(shift);
                 self.cursor.col = 0;
                 self.viewport.update_view(self.cursor);
+                false
             }
             Input {
                 key: Key::End,
@@ -205,11 +216,10 @@ impl TextArea {
                 self.handle_selection(shift);
                 self.cursor.col = self.lines[self.cursor.row].chars().count();
                 self.viewport.update_view(self.cursor);
+                false
             }
-            _ => {}
+            _ => false,
         }
-
-        true
     }
 }
 
@@ -223,14 +233,26 @@ impl TextArea {
         }
     }
 
-    pub fn set_cursor_start(&mut self, cursor: CursorPosition) {
+    pub fn lines(&self) -> &[String] {
+        &self.lines
+    }
+
+    pub fn cursor(&self) -> CursorPosition {
+        self.cursor
+    }
+
+    pub fn selection(&self) -> Option<CursorPosition> {
+        self.selection
+    }
+
+    pub fn set_cursor(&mut self, cursor: CursorPosition) {
         if self.is_cursor_valid(cursor) {
             self.cursor = cursor;
         }
-        self.viewport.update_view(cursor);
+        self.viewport.update_view(self.cursor);
     }
 
-    pub fn set_cursor_end(&mut self, cursor: Option<CursorPosition>) {
+    pub fn set_selection(&mut self, cursor: Option<CursorPosition>) {
         if let Some(cursor) = cursor {
             if self.is_cursor_valid(cursor) {
                 self.selection = Some(cursor);
@@ -250,13 +272,17 @@ impl TextArea {
         cursor_position
     }
 
-    pub fn take_selection(&self) -> Option<&str> {
-        if let Some(cursor_end) = self.selection {
-            if self.cursor.row != cursor_end.row {
+    pub fn selected_text(&mut self) -> Option<&str> {
+        if let Some(selection) = self.selection {
+            if self.cursor.row != selection.row {
                 return None;
             }
 
-            Some(self.lines[self.cursor.row].get_char_slice(self.cursor.col, cursor_end.col))
+            if selection < self.cursor {
+                Some(self.lines[self.cursor.row].get_char_slice(selection.col, self.cursor.col))
+            } else {
+                Some(self.lines[self.cursor.row].get_char_slice(self.cursor.col, selection.col))
+            }
         } else {
             None
         }
@@ -266,16 +292,16 @@ impl TextArea {
 // search
 impl TextArea {
     pub fn set_search_pattern(&mut self, pattern: &str) -> Result<()> {
-        match &self.search {
+        match &self.search_pattern {
             Some(r) if r.as_str() == pattern => {}
-            _ if pattern.is_empty() => self.search = None,
-            _ => self.search = Some(Regex::new(pattern)?),
+            _ if pattern.is_empty() => self.search_pattern = None,
+            _ => self.search_pattern = Some(Regex::new(pattern)?),
         }
         Ok(())
     }
 
     pub fn search_forward(&self) -> Option<(CursorPosition, CursorPosition)> {
-        let search_pattern = self.search.as_ref()?;
+        let search_pattern = self.search_pattern.as_ref()?;
 
         let cursor_line = self.lines.get(self.cursor.row)?;
         let lines_after_cursor = self.lines.split_at_checked(self.cursor.row + 1)?.1;
@@ -300,10 +326,14 @@ impl TextArea {
     }
 
     pub fn search_backward(&self) -> Option<(CursorPosition, CursorPosition)> {
-        let search_pattern = self.search.as_ref()?;
+        let search_pattern = self.search_pattern.as_ref()?;
 
-        let cursor_line = self.lines.get(self.cursor.row)?.split_at_checked(self.cursor.col)?.0;
-        let lines_before_cursor = self.lines.split_at_checked(self.cursor.row)?.0;
+        let cursor_line = self
+            .lines
+            .get(self.cursor.row)?
+            .split_at_checked(self.cursor.col.saturating_sub(1))?
+            .0;
+        let lines_before_cursor = self.lines.split_at_checked(dbg!(self.cursor.row))?.0;
 
         search_pattern
             .find_iter(cursor_line)
@@ -314,7 +344,7 @@ impl TextArea {
                     search_pattern
                         .find_iter(line)
                         .last()
-                        .map(|m| (self.cursor.row + 1 + i, m, line.as_str()))
+                        .map(|m| (self.cursor.row - i - 1, m, line.as_str()))
                 })
             })
             .map(|(row, m, line)| {
@@ -373,16 +403,49 @@ impl TextArea {
             };
 
             if let Some((start, end)) = selected_range {
-                return Line::from_iter([
-                    Span::from(line_info),
-                    Span::from(line.get_char_slice(0, start)),
-                    Span::from(line.get_char_slice(start, end)).style(SELECT),
-                    Span::from(line.get_char_slice(end, line.len())),
-                ]);
+                return match &self.search_pattern {
+                    Some(pattern) => {
+                        let mut spans = Vec::new();
+                        spans.push(Span::from(line_info));
+
+                        Self::mark_matches(&mut spans, line.get_char_slice(0, start), pattern);
+                        spans.push(Span::from(line.get_char_slice(start, end)).style(SELECT));
+                        Self::mark_matches(&mut spans, line.get_char_slice(end, line.len()), pattern);
+
+                        Line::from(spans)
+                    }
+                    None => Line::from_iter([
+                        Span::from(line_info),
+                        Span::from(line.get_char_slice(0, start)),
+                        Span::from(line.get_char_slice(start, end)).style(SELECT),
+                        Span::from(line.get_char_slice(end, line.len())),
+                    ]),
+                };
             }
         }
 
-        Line::from_iter([Span::from(line_info), Span::from(line)])
+        match &self.search_pattern {
+            Some(pattern) => {
+                let mut spans = Vec::new();
+                spans.push(Span::from(line_info));
+                Self::mark_matches(&mut spans, line, pattern);
+
+                Line::from(spans)
+            }
+            None => Line::from_iter([Span::from(line_info), Span::from(line)]),
+        }
+    }
+
+    fn mark_matches<'l>(spans: &mut Vec<Span<'l>>, line: &'l str, pattern: &Regex) {
+        const FOUND: Style = Style::new().bg(Color::Magenta);
+
+        let mut prev_end = 0;
+        for m in pattern.find_iter(line) {
+            spans.push(Span::from(&line[prev_end..m.start()]));
+            spans.push(Span::from(&line[m.start()..m.end()]).style(FOUND));
+            prev_end = m.end();
+        }
+        spans.push(Span::from(&line[prev_end..]));
     }
 }
 
@@ -396,11 +459,20 @@ impl Widget for &TextArea {
         let start = cmp::min(top_left.row, self.lines.len());
         let end = cmp::min(bottom_right.row, self.lines.len());
 
-        let line_number_len = num_digits(self.lines.len());
+        let line_number_len = if self.line_numbers {
+            num_digits(self.lines.len()).try_into().ok()
+        } else {
+            None
+        };
 
         let lines = self.lines[start..end]
             .iter()
-            .map(|line| line.get_char_slice(top_left.col, bottom_right.col - usize::from(line_number_len)))
+            .map(|line| {
+                line.get_char_slice(
+                    top_left.col,
+                    bottom_right.col - line_number_len.map(|ln| usize::from(u8::from(ln))).unwrap_or_default(),
+                )
+            })
             .map(|line| line.replace('\t', self.indent.spaces()))
             .collect::<Vec<_>>();
 
@@ -421,27 +493,30 @@ impl Widget for &TextArea {
 
 struct LineNumber {
     line_number: usize,
-    line_number_len: u8,
+    line_number_len: Option<NonZeroU8>,
     current_line: bool,
 }
 
-impl From<LineNumber> for Span<'_> {
+impl From<LineNumber> for Span<'static> {
     fn from(value: LineNumber) -> Self {
         const LINE_NUMBER_STYLE_SELECTED: Style = Style::new().fg(Color::DarkGray);
         const LINE_NUMBER_STYLE: Style = LINE_NUMBER_STYLE_SELECTED.add_modifier(Modifier::DIM);
 
-        Span::styled(
-            format!(
-                "{}{} ",
-                spaces(value.line_number_len - num_digits(value.line_number)),
-                value.line_number
+        match value.line_number_len {
+            Some(line_number_len) => Span::styled(
+                format!(
+                    "{}{} ",
+                    spaces(u8::from(line_number_len) - num_digits(value.line_number)),
+                    value.line_number
+                ),
+                if value.current_line {
+                    LINE_NUMBER_STYLE_SELECTED
+                } else {
+                    LINE_NUMBER_STYLE
+                },
             ),
-            if value.current_line {
-                LINE_NUMBER_STYLE_SELECTED
-            } else {
-                LINE_NUMBER_STYLE
-            },
-        )
+            None => Span::from(""),
+        }
     }
 }
 

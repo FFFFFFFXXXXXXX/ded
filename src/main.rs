@@ -2,7 +2,7 @@ use anyhow::Result;
 
 use crossterm::event::Event;
 use ratatui::DefaultTerminal;
-use ratatui::layout::{Constraint, Direction, Layout};
+use ratatui::layout::{Constraint, Direction, Layout, Position};
 use ratatui::style::{Modifier, Style};
 use ratatui::widgets::Paragraph;
 
@@ -113,7 +113,7 @@ impl<'a> Editor<'a> {
             // wait for next userinput (blocking!)
             let event = crossterm::event::read()?;
             // manually re-render on window resize because Event::Resize(_, _) gets ignored by tui_textarea
-            if let Event::Resize(width, height) = event {
+            if let Event::Resize(_, _) = event {
                 self.render(&mut terminal)?;
             }
 
@@ -163,8 +163,7 @@ impl<'a> Editor<'a> {
             let slot = format!("[{}/{}]", self.current + 1, num_buffers);
             let path = format!(" {}{} ", buffer.path.display(), modified);
             let CursorPosition { row, col } = buffer.textarea.cursor();
-            let CursorPosition { row: row_s, col: col_s } = buffer.textarea.selection.unwrap_or_default();
-            let cursor = format!("({},{}) ({},{})", row, col, row_s, col_s);
+            let cursor = format!("({},{})", row, col);
             let status_chunks = Layout::default()
                 .direction(Direction::Horizontal)
                 .constraints(
@@ -181,7 +180,14 @@ impl<'a> Editor<'a> {
             f.render_widget(Paragraph::new(path).style(status_style), status_chunks[1]);
             f.render_widget(Paragraph::new(cursor).style(status_style), status_chunks[2]);
 
-            f.set_cursor_position(buffer.textarea.get_display_cursor_position());
+            if buffer.searchbox.is_open() {
+                f.set_cursor_position(Position::new(
+                    buffer.searchbox.textarea.get_display_cursor_position().x,
+                    1,
+                ));
+            } else {
+                f.set_cursor_position(buffer.textarea.get_display_cursor_position());
+            }
         })?;
 
         Ok(())
@@ -233,26 +239,33 @@ impl<'a> Editor<'a> {
 
         match event {
             Input { key: Key::Down, .. } => {
-                if buffer.textarea.search_forward().is_some() {
+                if let Some((cursor, selection)) = buffer.textarea.search_forward() {
                     buffer.searchbox.set_error_message(None::<&'static str>);
+                    buffer.textarea.set_cursor(cursor);
+                    buffer.textarea.set_selection(Some(selection));
                 } else {
                     buffer.searchbox.set_error_message(Some("not found"));
                 }
             }
             Input { key: Key::Up, .. } => {
-                if buffer.textarea.search_backward().is_some() {
+                if let Some((cursor, selection)) = buffer.textarea.search_backward() {
                     buffer.searchbox.set_error_message(None::<&'static str>);
+                    buffer.textarea.set_cursor(cursor);
+                    buffer.textarea.set_selection(Some(selection));
                 } else {
                     buffer.searchbox.set_error_message(Some("not found"));
                 }
             }
             Input { key: Key::Enter, .. } => {
-                if let Some((cursor_start, cursor_end)) = buffer.textarea.search_forward() {
-                    buffer.textarea.set_cursor_start(cursor_start);
-                    buffer.textarea.set_cursor_end(Some(cursor_end));
-                } else {
-                    buffer.searchbox.set_error_message(Some("not found"));
+                if buffer.textarea.selection().is_none() {
+                    if let Some((cursor_start, cursor_end)) = buffer.textarea.search_forward() {
+                        buffer.textarea.set_cursor(cursor_start);
+                        buffer.textarea.set_selection(Some(cursor_end));
+                    } else {
+                        buffer.searchbox.set_error_message(Some("not found"));
+                    }
                 }
+
                 buffer.searchbox.close();
                 buffer.textarea.set_search_pattern("").unwrap();
             }
@@ -282,7 +295,7 @@ impl<'a> Editor<'a> {
                     let prev_search_pattern = buffer.searchbox.open();
                     buffer
                         .textarea
-                        .take_selection()
+                        .selected_text()
                         .unwrap_or(prev_search_pattern)
                         .to_owned()
                 };
