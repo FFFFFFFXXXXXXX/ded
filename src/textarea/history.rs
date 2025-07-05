@@ -12,8 +12,7 @@ impl BytePosition {
             row: cursor.row,
             col: line
                 .char_indices()
-                .skip(cursor.col)
-                .next()
+                .nth(cursor.col)
                 .map(|(idx, _)| idx)
                 .unwrap_or_else(|| line.len()),
         }

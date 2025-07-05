@@ -229,11 +229,9 @@ impl TextArea {
                     .enumerate()
                     .rev()
                     .skip_while(|(_, line)| line.is_empty())
-                    .skip_while(|(_, line)| !line.is_empty())
-                    .next()
-                    .map(|(idx, _)| idx + 1)
+                    .find_map(|(idx, line)| line.is_empty().then_some(idx + 1))
                     .unwrap_or(0);
-                let col = cursor.col.min(lines[cursor.row].len());
+                let col = cursor.col.min(lines[row].len());
 
                 self.set_cursor(CursorPosition { row, col }, shift);
             }
@@ -285,25 +283,21 @@ impl TextArea {
                         .iter()
                         .enumerate()
                         .skip(1)
-                        .skip_while(|(_, line)| line.is_empty())
-                        .next()
-                        .map(|(idx, _)| cursor.row + idx)
+                        .find_map(|(idx, line)| (!line.is_empty()).then_some(cursor.row + idx))
                         .unwrap_or_else(|| lines.len().saturating_sub(1))
                 } else {
                     lines[cursor.row..]
                         .iter()
                         .enumerate()
                         .skip(1)
-                        .skip_while(|(_, line)| !line.is_empty())
-                        .next()
-                        .map(|(idx, _)| cursor.row + idx)
+                        .find_map(|(idx, line)| line.is_empty().then_some(cursor.row + idx))
                         .unwrap_or_else(|| lines.len().saturating_sub(1))
                 };
 
                 self.set_cursor(
                     CursorPosition {
                         row,
-                        col: cursor.col.min(lines[cursor.row].len()),
+                        col: cursor.col.min(lines[row].len()),
                     },
                     shift,
                 );
@@ -493,7 +487,7 @@ impl TextArea {
             };
 
             match selected_range {
-                Some((start, end)) if start == 0 && end == 0 && line.len() == 0 => {
+                Some((start, end)) if start == 0 && end == 0 && line.is_empty() => {
                     return Line::from_iter([Span::from(line_info), Span::from(" ").style(SELECT)]);
                 }
                 Some((start, end)) => {

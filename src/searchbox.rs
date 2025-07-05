@@ -80,7 +80,7 @@ impl<'a> SearchBox<'a> {
         self.border_block = match error_message {
             Some(err_msg) => Block::default()
                 .borders(Borders::ALL)
-                .title(format!(" Search: {} ", err_msg))
+                .title(format!(" Search: {err_msg} "))
                 .style(Style::default().fg(Color::Red)),
             None => Block::default().borders(Borders::ALL).title(" Search: "),
         };

@@ -205,14 +205,12 @@ impl<'a> App<'a> {
                 }
             }
             Input { key: Key::Enter, .. } => {
-                if !buffer.searchbox.textarea.lines[0].is_empty() {
-                    if buffer.editor.textarea.selection().is_none() {
-                        if let Some((cursor_start, cursor_end)) = buffer.editor.textarea.search_forward() {
-                            buffer.editor.textarea.set_cursor(cursor_start, false);
-                            buffer.editor.textarea.set_selection(Some(cursor_end));
-                        } else {
-                            buffer.searchbox.set_error_message(Some("not found"));
-                        }
+                if !buffer.searchbox.textarea.lines[0].is_empty() && buffer.editor.textarea.selection().is_none() {
+                    if let Some((cursor_start, cursor_end)) = buffer.editor.textarea.search_forward() {
+                        buffer.editor.textarea.set_cursor(cursor_start, false);
+                        buffer.editor.textarea.set_selection(Some(cursor_end));
+                    } else {
+                        buffer.searchbox.set_error_message(Some("not found"));
                     }
                 }
 

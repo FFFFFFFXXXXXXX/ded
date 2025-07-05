@@ -1,6 +1,6 @@
 use std::cmp;
 
-#[derive(Debug, Clone, Copy, Default, Eq, Ord)]
+#[derive(Debug, Clone, Copy, Default, Eq)]
 pub struct CursorPosition {
     pub row: usize,
     pub col: usize,
@@ -14,12 +14,18 @@ impl PartialEq for CursorPosition {
 
 impl PartialOrd for CursorPosition {
     fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
+        Some(Self::cmp(self, other))
+    }
+}
+
+impl Ord for CursorPosition {
+    fn cmp(&self, other: &Self) -> cmp::Ordering {
         if self == other {
-            Some(cmp::Ordering::Equal)
+            cmp::Ordering::Equal
         } else if self.row < other.row || (self.row == other.row && self.col < other.col) {
-            Some(cmp::Ordering::Less)
+            cmp::Ordering::Less
         } else {
-            Some(cmp::Ordering::Greater)
+            cmp::Ordering::Greater
         }
     }
 }
