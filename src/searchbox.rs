@@ -6,7 +6,7 @@ use ratatui::style::{Color, Style};
 use ratatui::widgets::{Block, Borders, Widget};
 
 use crate::input::{Input, Key};
-use crate::textarea::TextArea;
+use crate::textarea::{CursorPosition, TextArea};
 
 #[derive(Debug)]
 pub struct SearchBox<'a> {
@@ -17,8 +17,11 @@ pub struct SearchBox<'a> {
 
 impl<'a> Default for SearchBox<'a> {
     fn default() -> Self {
+        let mut textarea = TextArea::default();
+        textarea.line_numbers = false;
+
         Self {
-            textarea: TextArea::new_with_line_numbers(false),
+            textarea,
             border_block: Block::default().borders(Borders::ALL).title(" Search: "),
             open: false,
         }
@@ -28,7 +31,7 @@ impl<'a> Default for SearchBox<'a> {
 impl<'a> SearchBox<'a> {
     pub fn open(&mut self) -> &str {
         self.open = true;
-        &self.textarea.lines()[0]
+        &self.textarea.lines[0]
     }
 
     pub fn close(&mut self) {
@@ -40,14 +43,37 @@ impl<'a> SearchBox<'a> {
         self.open
     }
 
+    pub fn text(&self) -> &str {
+        &self.textarea.lines[0]
+    }
+
+    pub fn set_text(&mut self, pattern: &str) {
+        self.textarea.lines[0] = pattern.to_string();
+        self.textarea
+            .set_cursor(CursorPosition { row: 0, col: pattern.len() }, false);
+    }
+
     pub fn input(&mut self, input: Input) -> Option<&'_ str> {
         match input {
-            Input { key: Key::Enter, .. } => None,
+            Input {
+                key: Key::Char(c),
+                shift,
+                alt: false,
+                ctrl: false,
+            } => {
+                //
+                true
+            }
+            Input { key: Key::Enter, .. } => {
+                //
+                true
+            }
             input => {
-                let modified = self.textarea.input(input);
-                modified.then(|| self.textarea.lines()[0].as_str())
+                self.textarea.input(input);
+                false
             }
         }
+        .then(|| self.text())
     }
 
     pub fn set_error_message(&mut self, error_message: Option<impl Display>) {
@@ -58,10 +84,6 @@ impl<'a> SearchBox<'a> {
                 .style(Style::default().fg(Color::Red)),
             None => Block::default().borders(Borders::ALL).title(" Search: "),
         };
-    }
-
-    pub fn set_pattern(&mut self, pattern: &str) {
-        // self.textarea.
     }
 }
 

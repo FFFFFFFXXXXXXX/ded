@@ -11,83 +11,30 @@ use std::io::{self, Write};
 use std::path::PathBuf;
 use std::{env, fs};
 
+use crate::editor::Editor;
 use crate::input::{Input, Key};
 use crate::searchbox::SearchBox;
-use crate::textarea::{CursorPosition, TextArea};
 
+mod editor;
 mod input;
 mod searchbox;
 mod textarea;
 
 fn main() -> Result<()> {
     let term = ratatui::init();
-    let result = (|| Editor::new(env::args_os().skip(1))?.run(term))();
+    let result = (|| App::new(env::args_os().skip(1))?.run(term))();
     ratatui::restore();
 
     result
 }
 
-#[derive(Debug, Default)]
-struct Buffer<'a> {
-    path: PathBuf,
-    textarea: TextArea,
-    searchbox: SearchBox<'a>,
-    modified: bool,
-}
-
-impl<'a> Buffer<'a> {
-    fn new(path: PathBuf) -> Result<Self> {
-        let textarea = if path.exists() {
-            TextArea::new_from_file(&fs::File::open(&path)?)?
-        } else {
-            TextArea::default()
-        };
-
-        Ok(Self {
-            textarea,
-            path,
-            ..Default::default()
-        })
-    }
-
-    fn save(&mut self) -> Result<()> {
-        if !self.modified {
-            return Ok(());
-        }
-
-        let mut f = io::BufWriter::new(fs::File::create(&self.path)?);
-
-        let lines = self.textarea.lines();
-        for line in lines.iter().take(lines.len() - 1) {
-            f.write_all(line.as_bytes())?;
-            f.write_all(b"\n")?;
-        }
-
-        if let Some(last_line) = lines.last() {
-            f.write_all(last_line.as_bytes())?;
-            if !last_line.is_empty() {
-                f.write_all(b"\n")?;
-            }
-        }
-
-        self.modified = false;
-        Ok(())
-    }
-}
-
-#[derive(PartialEq, Eq)]
-enum Status {
-    Continue,
-    Stop,
-}
-
-struct Editor<'a> {
+struct App<'a> {
     buffers: Vec<Buffer<'a>>,
     current: usize,
     message: Option<Cow<'static, str>>,
 }
 
-impl<'a> Editor<'a> {
+impl<'a> App<'a> {
     fn new<I>(paths: I) -> Result<Self>
     where
         I: Iterator,
@@ -151,7 +98,7 @@ impl<'a> Editor<'a> {
             }
 
             f.render_widget(
-                &buffer.textarea,
+                &buffer.editor.textarea,
                 Layout::default()
                     .direction(Direction::Horizontal)
                     .constraints([Constraint::Min(1), Constraint::Length(1)])
@@ -162,8 +109,8 @@ impl<'a> Editor<'a> {
             let modified = if buffer.modified { " [modified]" } else { "" };
             let slot = format!("[{}/{}]", self.current + 1, num_buffers);
             let path = format!(" {}{} ", buffer.path.display(), modified);
-            let CursorPosition { row, col } = buffer.textarea.cursor();
-            let cursor = format!("({},{})", row, col);
+            let cursor = buffer.editor.textarea.cursor();
+            let cursor = format!("({},{})", cursor.row, cursor.col);
             let status_chunks = Layout::default()
                 .direction(Direction::Horizontal)
                 .constraints(
@@ -181,12 +128,9 @@ impl<'a> Editor<'a> {
             f.render_widget(Paragraph::new(cursor).style(status_style), status_chunks[2]);
 
             if buffer.searchbox.is_open() {
-                f.set_cursor_position(Position::new(
-                    buffer.searchbox.textarea.get_display_cursor_position().x,
-                    1,
-                ));
+                f.set_cursor_position(Position::new(buffer.searchbox.textarea.terminal_cursor_position().x, 1));
             } else {
-                f.set_cursor_position(buffer.textarea.get_display_cursor_position());
+                f.set_cursor_position(buffer.editor.textarea.terminal_cursor_position());
             }
         })?;
 
@@ -239,43 +183,49 @@ impl<'a> Editor<'a> {
 
         match event {
             Input { key: Key::Down, .. } => {
-                if let Some((cursor, selection)) = buffer.textarea.search_forward() {
-                    buffer.searchbox.set_error_message(None::<&'static str>);
-                    buffer.textarea.set_cursor(cursor);
-                    buffer.textarea.set_selection(Some(selection));
-                } else {
-                    buffer.searchbox.set_error_message(Some("not found"));
-                }
-            }
-            Input { key: Key::Up, .. } => {
-                if let Some((cursor, selection)) = buffer.textarea.search_backward() {
-                    buffer.searchbox.set_error_message(None::<&'static str>);
-                    buffer.textarea.set_cursor(cursor);
-                    buffer.textarea.set_selection(Some(selection));
-                } else {
-                    buffer.searchbox.set_error_message(Some("not found"));
-                }
-            }
-            Input { key: Key::Enter, .. } => {
-                if buffer.textarea.selection().is_none() {
-                    if let Some((cursor_start, cursor_end)) = buffer.textarea.search_forward() {
-                        buffer.textarea.set_cursor(cursor_start);
-                        buffer.textarea.set_selection(Some(cursor_end));
+                if !buffer.searchbox.textarea.lines[0].is_empty() {
+                    if let Some((cursor, selection)) = buffer.editor.textarea.search_forward() {
+                        buffer.searchbox.set_error_message(None::<&str>);
+                        buffer.editor.textarea.set_cursor(cursor, false);
+                        buffer.editor.textarea.set_selection(Some(selection));
                     } else {
                         buffer.searchbox.set_error_message(Some("not found"));
                     }
                 }
+            }
+            Input { key: Key::Up, .. } => {
+                if !buffer.searchbox.textarea.lines[0].is_empty() {
+                    if let Some((cursor, selection)) = buffer.editor.textarea.search_backward() {
+                        buffer.searchbox.set_error_message(None::<&str>);
+                        buffer.editor.textarea.set_cursor(cursor, false);
+                        buffer.editor.textarea.set_selection(Some(selection));
+                    } else {
+                        buffer.searchbox.set_error_message(Some("not found"));
+                    }
+                }
+            }
+            Input { key: Key::Enter, .. } => {
+                if !buffer.searchbox.textarea.lines[0].is_empty() {
+                    if buffer.editor.textarea.selection().is_none() {
+                        if let Some((cursor_start, cursor_end)) = buffer.editor.textarea.search_forward() {
+                            buffer.editor.textarea.set_cursor(cursor_start, false);
+                            buffer.editor.textarea.set_selection(Some(cursor_end));
+                        } else {
+                            buffer.searchbox.set_error_message(Some("not found"));
+                        }
+                    }
+                }
 
                 buffer.searchbox.close();
-                buffer.textarea.set_search_pattern("").unwrap();
+                buffer.editor.textarea.set_search_pattern("").unwrap();
             }
             Input { key: Key::Esc, .. } => {
                 buffer.searchbox.close();
-                buffer.textarea.set_search_pattern("").unwrap();
+                buffer.editor.textarea.set_search_pattern("").unwrap();
             }
             input => {
                 if let Some(query) = buffer.searchbox.input(input) {
-                    let maybe_err = buffer.textarea.set_search_pattern(query).err();
+                    let maybe_err = buffer.editor.textarea.set_search_pattern(query).err();
                     buffer.searchbox.set_error_message(maybe_err);
                 }
             }
@@ -293,21 +243,71 @@ impl<'a> Editor<'a> {
             } => {
                 let search_pattern = {
                     let prev_search_pattern = buffer.searchbox.open();
-                    buffer
-                        .textarea
-                        .selected_text()
-                        .unwrap_or(prev_search_pattern)
-                        .to_owned()
+                    buffer.editor.selected_text().unwrap_or(prev_search_pattern).to_owned()
                 };
 
-                buffer.searchbox.set_pattern(&search_pattern);
-                let maybe_err = buffer.textarea.set_search_pattern(&search_pattern).err();
+                buffer.searchbox.set_text(&search_pattern);
+                let maybe_err = buffer.editor.textarea.set_search_pattern(&search_pattern).err();
                 buffer.searchbox.set_error_message(maybe_err);
             }
             input => {
                 let buffer = &mut self.buffers[self.current];
-                buffer.modified |= buffer.textarea.input(input);
+                buffer.modified |= buffer.editor.input(input);
             }
         }
+    }
+}
+
+#[derive(PartialEq, Eq)]
+enum Status {
+    Continue,
+    Stop,
+}
+
+#[derive(Debug, Default)]
+struct Buffer<'a> {
+    path: PathBuf,
+    searchbox: SearchBox<'a>,
+    editor: Editor,
+    modified: bool,
+}
+
+impl<'a> Buffer<'a> {
+    fn new(path: PathBuf) -> Result<Self> {
+        let textarea = if path.exists() {
+            Editor::new_from_file(&fs::File::open(&path)?)?
+        } else {
+            Editor::default()
+        };
+
+        Ok(Self {
+            editor: textarea,
+            path,
+            ..Default::default()
+        })
+    }
+
+    fn save(&mut self) -> Result<()> {
+        if !self.modified {
+            return Ok(());
+        }
+
+        let mut f = io::BufWriter::new(fs::File::create(&self.path)?);
+
+        let lines = &self.editor.textarea.lines;
+        for line in lines.iter().take(lines.len() - 1) {
+            f.write_all(line.as_bytes())?;
+            f.write_all(b"\n")?;
+        }
+
+        if let Some(last_line) = lines.last() {
+            f.write_all(last_line.as_bytes())?;
+            if !last_line.is_empty() {
+                f.write_all(b"\n")?;
+            }
+        }
+
+        self.modified = false;
+        Ok(())
     }
 }
