@@ -7,7 +7,7 @@ pub struct BytePosition {
 }
 
 impl BytePosition {
-    pub fn new(cursor: CursorPosition, line: &str) -> Self {
+    pub fn from_line(cursor: CursorPosition, line: &str) -> Self {
         Self {
             row: cursor.row,
             col: line
@@ -21,30 +21,147 @@ impl BytePosition {
 
 #[derive(Debug, Clone)]
 pub enum HistoryAction {
-    InsertChar { char: char, position: BytePosition },
-    InsertString { string: String, position: BytePosition },
-    RemoveChar { char: char, position: BytePosition },
-    RemoveString { string: String, position: BytePosition },
+    InsertChar {
+        char: char,
+        position: BytePosition,
+        cursor: (CursorPosition, CursorPosition),
+    },
+    RemoveChar {
+        char: char,
+        position: BytePosition,
+        cursor: (CursorPosition, CursorPosition),
+    },
+    InsertLinebreak {
+        position: BytePosition,
+        cursor: (CursorPosition, CursorPosition),
+    },
+    RemoveLinebreak {
+        position: BytePosition,
+        cursor: (CursorPosition, CursorPosition),
+    },
+    InsertLines {
+        lines: Vec<String>,
+        position: BytePosition,
+        cursor: (CursorPosition, CursorPosition),
+    },
+    RemoveLines {
+        lines: Vec<String>,
+        position: BytePosition,
+        cursor: (CursorPosition, CursorPosition),
+    },
 }
 
 impl HistoryAction {
     pub fn invert(self) -> Self {
         match self {
-            HistoryAction::InsertChar { char, position } => HistoryAction::RemoveChar { char, position },
-            HistoryAction::RemoveChar { char, position } => HistoryAction::InsertChar { char, position },
-            _ => todo!(),
+            HistoryAction::InsertChar {
+                char,
+                position,
+                cursor: (c1, c2),
+            } => HistoryAction::RemoveChar {
+                char,
+                position,
+                cursor: (c2, c1),
+            },
+            HistoryAction::RemoveChar {
+                char,
+                position,
+                cursor: (c1, c2),
+            } => HistoryAction::InsertChar {
+                char,
+                position,
+                cursor: (c2, c1),
+            },
+            HistoryAction::InsertLinebreak { position, cursor: (c1, c2) } => {
+                HistoryAction::RemoveLinebreak { position, cursor: (c2, c1) }
+            }
+            HistoryAction::RemoveLinebreak { position, cursor: (c1, c2) } => {
+                HistoryAction::InsertLinebreak { position, cursor: (c2, c1) }
+            }
+            HistoryAction::InsertLines {
+                lines,
+                position,
+                cursor: (c1, c2),
+            } => HistoryAction::RemoveLines {
+                lines,
+                position,
+                cursor: (c2, c1),
+            },
+            HistoryAction::RemoveLines {
+                lines,
+                position,
+                cursor: (c1, c2),
+            } => HistoryAction::InsertLines {
+                lines,
+                position,
+                cursor: (c2, c1),
+            },
         }
     }
 
-    pub fn apply(&self, lines: &mut [String]) {
+    pub fn apply(&self, lines: &mut Vec<String>) -> CursorPosition {
         match self {
-            HistoryAction::InsertChar { char, position } => {
+            HistoryAction::InsertChar { char, position, cursor: (_, c) } => {
                 lines[position.row].insert(position.col, *char);
+                *c
             }
-            HistoryAction::RemoveChar { position, .. } => {
+            HistoryAction::RemoveChar { position, cursor: (_, c), .. } => {
                 lines[position.row].remove(position.col);
+                *c
             }
-            _ => {}
+            HistoryAction::InsertLinebreak { position, cursor: (_, c) } => {
+                lines.insert(position.row + 1, lines[position.row][position.col..].to_string());
+                lines[position.row].drain(position.col..);
+                *c
+            }
+            HistoryAction::RemoveLinebreak { position, cursor: (_, c) } => {
+                let (a, b) = lines.split_at_mut(position.row + 1);
+                a.last_mut().unwrap().push_str(b.first().unwrap());
+                lines.remove(position.row + 1);
+                *c
+            }
+            HistoryAction::InsertLines {
+                lines: ls,
+                position,
+                cursor: (_, c),
+            } => {
+                if ls.len() == 1 {
+                    lines[position.row].insert_str(position.col, ls.first().unwrap());
+                } else {
+                    let (l1, l2) = lines[position.row].split_at(position.col);
+
+                    let mut first_line = String::from(l1);
+                    first_line.push_str(ls.first().unwrap());
+
+                    let mut last_line = String::from(ls.last().unwrap());
+                    last_line.push_str(l2);
+
+                    lines[position.row] = first_line;
+                    lines.splice(
+                        position.row + 1..position.row + 1,
+                        ls.iter().take(ls.len()).skip(1).map(|l| l.to_string()),
+                    );
+                    lines[position.row + ls.len() - 1] = last_line;
+                }
+                *c
+            }
+            HistoryAction::RemoveLines {
+                lines: ls,
+                position,
+                cursor: (_, c),
+            } => {
+                if ls.len() == 1 {
+                    lines[position.row].drain(position.col..position.col + ls.first().unwrap().len());
+                } else {
+                    let (a, b) = lines.split_at_mut(position.row + 1);
+                    a.last_mut()
+                        .unwrap()
+                        .replace_range(position.col.., &b[ls.len() - 2][ls.last().unwrap().len()..]);
+
+                    lines.drain(position.row + 1..position.row + ls.len());
+                }
+                *c
+            }
         }
     }
 }

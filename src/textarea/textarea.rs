@@ -29,7 +29,9 @@ pub struct TextArea {
     selection: Option<CursorPosition>,
     view: View,
 
-    history: Vec<HistoryAction>,
+    undo_history: Vec<HistoryAction>,
+    redo_history: Vec<HistoryAction>,
+
     clipboard: String,
     search_pattern: Option<Regex>,
 
@@ -45,7 +47,8 @@ impl Default for TextArea {
             selection: Default::default(),
             view: Default::default(),
 
-            history: Default::default(),
+            undo_history: Default::default(),
+            redo_history: Default::default(),
             clipboard: Default::default(),
             search_pattern: Default::default(),
 
@@ -184,18 +187,31 @@ impl TextArea {
             })
     }
 
-    pub fn push_history_action(&mut self, history_action: HistoryAction) {
-        history_action.apply(&mut self.lines);
-        self.history.push(history_action);
+    pub fn do_action(&mut self, history_action: HistoryAction) -> CursorPosition {
+        self.redo_history.clear();
+
+        let cursor = history_action.apply(&mut self.lines);
+        self.undo_history.push(history_action);
+        cursor
     }
 
-    pub fn pop_history_action(&mut self) {
-        if let Some(history_action) = self.history.pop() {
-            history_action.invert().apply(&mut self.lines);
-        }
+    pub fn undo_action(&mut self) -> Option<CursorPosition> {
+        let action = self.undo_history.pop()?.invert();
+        let cursor = action.apply(&mut self.lines);
+        self.redo_history.push(action);
+
+        Some(cursor)
     }
 
-    pub fn input(&mut self, input: Input) {
+    pub fn redo_action(&mut self) -> Option<CursorPosition> {
+        let action = self.redo_history.pop()?.invert();
+        let cursor = action.apply(&mut self.lines);
+        self.undo_history.push(action);
+
+        Some(cursor)
+    }
+
+    pub fn input(&mut self, input: Input) -> bool {
         match input {
             Input {
                 key: Key::Up,
@@ -209,11 +225,12 @@ impl TextArea {
                     self.set_cursor(
                         CursorPosition {
                             row: cursor.row - 1,
-                            col: cursor.col.min(lines[cursor.row].len()),
+                            col: cursor.col.min(lines[cursor.row - 1].len()),
                         },
                         shift,
                     );
                 }
+                false
             }
             Input {
                 key: Key::Up,
@@ -234,6 +251,7 @@ impl TextArea {
                 let col = cursor.col.min(lines[row].len());
 
                 self.set_cursor(CursorPosition { row, col }, shift);
+                false
             }
             Input {
                 key: Key::Up,
@@ -250,6 +268,7 @@ impl TextArea {
                     },
                     shift,
                 );
+                false
             }
             Input {
                 key: Key::Down,
@@ -263,11 +282,12 @@ impl TextArea {
                     self.set_cursor(
                         CursorPosition {
                             row: cursor.row + 1,
-                            col: cursor.col.min(lines[cursor.row].len()),
+                            col: cursor.col.min(lines[cursor.row + 1].len()),
                         },
                         shift,
                     );
                 }
+                false
             }
             Input {
                 key: Key::Down,
@@ -301,6 +321,7 @@ impl TextArea {
                     },
                     shift,
                 );
+                false
             }
             Input {
                 key: Key::Down,
@@ -317,6 +338,7 @@ impl TextArea {
                     },
                     shift,
                 );
+                false
             }
             Input {
                 key: Key::Left,
@@ -342,7 +364,7 @@ impl TextArea {
                                 self.set_cursor(
                                     CursorPosition {
                                         row: cursor.row - 1,
-                                        col: lines[cursor.row].len(),
+                                        col: lines[cursor.row - 1].len(),
                                     },
                                     shift,
                                 );
@@ -352,6 +374,7 @@ impl TextArea {
                         }
                     }
                 };
+                false
             }
             Input {
                 key: Key::Left,
@@ -361,13 +384,18 @@ impl TextArea {
             } => {
                 let lines = &self.lines;
                 let cursor = self.cursor();
-                self.set_cursor(
-                    CursorPosition {
-                        col: lines[cursor.row].previous_word(cursor.col).unwrap_or(0),
-                        ..cursor
+
+                let cursor = match lines[cursor.row].previous_word(cursor.col) {
+                    Some(col) => CursorPosition { col, ..cursor },
+                    None if cursor.col > 0 => CursorPosition { col: 0, ..cursor },
+                    None if cursor.row > 0 => CursorPosition {
+                        row: cursor.row - 1,
+                        col: lines[cursor.row - 1].len(),
                     },
-                    shift,
-                );
+                    None => cursor,
+                };
+                self.set_cursor(cursor, shift);
+                false
             }
             Input {
                 key: Key::Right,
@@ -397,6 +425,7 @@ impl TextArea {
                         }
                     }
                 };
+                false
             }
             Input {
                 key: Key::Right,
@@ -407,10 +436,18 @@ impl TextArea {
                 let lines = &self.lines;
                 let cursor = self.cursor();
 
-                let col = lines[cursor.row]
-                    .next_word(cursor.col)
-                    .unwrap_or_else(|| lines[cursor.row].len());
-                self.set_cursor(CursorPosition { col, ..cursor }, shift);
+                let cursor = match lines[cursor.row].next_word(cursor.col) {
+                    Some(col) => CursorPosition { col, ..cursor },
+                    None if cursor.col < lines[cursor.row].len() => CursorPosition {
+                        col: lines[cursor.row].len(),
+                        ..cursor
+                    },
+                    None if cursor.row < lines.len() - 1 => CursorPosition { row: cursor.row + 1, col: 0 },
+                    None => cursor,
+                };
+
+                self.set_cursor(cursor, shift);
+                false
             }
             Input {
                 key: Key::Home,
@@ -420,6 +457,7 @@ impl TextArea {
             } => {
                 let cursor = self.cursor();
                 self.set_cursor(CursorPosition { col: 0, ..cursor }, shift);
+                false
             }
             Input {
                 key: Key::End,
@@ -436,9 +474,37 @@ impl TextArea {
                     },
                     shift,
                 );
+                false
             }
-            _ => {}
-        };
+            Input {
+                key: Key::Char('z'),
+                ctrl: true,
+                alt: false,
+                shift: false,
+            } => {
+                if let Some(cursor) = self.undo_action() {
+                    self.set_cursor(cursor, false);
+                    true
+                } else {
+                    false
+                }
+            }
+            Input {
+                key: Key::Char('y'),
+                ctrl: true,
+                alt: false,
+                shift: false,
+            } => {
+                if let Some(cursor) = self.redo_action() {
+                    self.set_cursor(cursor, false);
+                    true
+                } else {
+                    false
+                }
+            }
+
+            _ => false,
+        }
     }
 }
 
@@ -496,17 +562,17 @@ impl TextArea {
                             let mut spans = Vec::new();
                             spans.push(Span::from(line_info));
 
-                            Self::mark_matches(&mut spans, line.get_char_slice(0, start), pattern);
-                            spans.push(Span::from(line.get_char_slice(start, end)).style(SELECT));
-                            Self::mark_matches(&mut spans, line.get_char_slice(end, line.len()), pattern);
+                            Self::mark_matches(&mut spans, line.char_slice(..start), pattern);
+                            spans.push(Span::from(line.char_slice(start..end)).style(SELECT));
+                            Self::mark_matches(&mut spans, line.char_slice(end..), pattern);
 
                             Line::from(spans)
                         }
                         None => Line::from_iter([
                             Span::from(line_info),
-                            Span::from(line.get_char_slice(0, start)),
-                            Span::from(line.get_char_slice(start, end)).style(SELECT),
-                            Span::from(line.get_char_slice(end, line.len())),
+                            Span::from(line.char_slice(..start)),
+                            Span::from(line.char_slice(start..end)).style(SELECT),
+                            Span::from(line.char_slice(end..)),
                         ]),
                     };
                 }
@@ -558,9 +624,9 @@ impl Widget for &TextArea {
         let lines = self.lines[start..end]
             .iter()
             .map(|line| {
-                line.get_char_slice(
-                    top_left.col,
-                    bottom_right.col - line_number_len.map(|ln| usize::from(u8::from(ln))).unwrap_or_default(),
+                line.char_slice(
+                    top_left.col
+                        ..(bottom_right.col - line_number_len.map(|ln| usize::from(u8::from(ln))).unwrap_or_default()),
                 )
             })
             .map(|line| line.replace('\t', self.indent.spaces()))
