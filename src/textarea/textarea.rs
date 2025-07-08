@@ -1,6 +1,7 @@
 use std::{cell::Cell, cmp, num::NonZeroU8};
 
 use anyhow::Result;
+use arboard::Clipboard;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -14,6 +15,7 @@ use super::history::HistoryAction;
 use super::indent::Indent;
 use super::word::Word;
 use crate::input::{Input, Key};
+use crate::textarea::{ByteIndex, BytePosition};
 
 #[derive(Default, Debug, Clone)]
 struct View {
@@ -22,7 +24,6 @@ struct View {
     height: Cell<usize>,
 }
 
-#[derive(Debug, Clone)]
 pub struct TextArea {
     pub lines: Vec<String>,
     cursor: CursorPosition,
@@ -32,7 +33,7 @@ pub struct TextArea {
     undo_history: Vec<HistoryAction>,
     redo_history: Vec<HistoryAction>,
 
-    clipboard: String,
+    clipboard: Clipboard,
     search_pattern: Option<Regex>,
 
     pub indent: Indent,
@@ -49,7 +50,7 @@ impl Default for TextArea {
 
             undo_history: Default::default(),
             redo_history: Default::default(),
-            clipboard: Default::default(),
+            clipboard: Clipboard::new().unwrap(),
             search_pattern: Default::default(),
 
             indent: Default::default(),
@@ -477,6 +478,60 @@ impl TextArea {
                 false
             }
             Input {
+                key: Key::PageUp,
+                shift,
+                alt: false,
+                ctrl: false,
+            } => {
+                let lines = &self.lines;
+                let cursor = self.cursor();
+
+                let row = cursor.row.saturating_sub(self.view.height.get());
+                self.set_cursor(
+                    CursorPosition {
+                        row,
+                        col: cursor.col.min(lines[row].chars().count()),
+                    },
+                    shift,
+                );
+                false
+            }
+            Input {
+                key: Key::PageDown,
+                shift,
+                alt: false,
+                ctrl: false,
+            } => {
+                let lines = &self.lines;
+                let cursor = self.cursor();
+
+                let row = std::cmp::min(lines.len() - 1, cursor.row + self.view.height.get());
+                self.set_cursor(
+                    CursorPosition {
+                        row,
+                        col: cursor.col.min(lines[row].chars().count()),
+                    },
+                    shift,
+                );
+                false
+            }
+            Input {
+                key: Key::Char('a'),
+                ctrl: true,
+                alt: false,
+                shift: false,
+            } => {
+                self.set_cursor(
+                    CursorPosition {
+                        row: self.lines.len() - 1,
+                        col: self.lines.last().unwrap().len(),
+                    },
+                    false,
+                );
+                self.set_selection(Some(CursorPosition { row: 0, col: 0 }));
+                false
+            }
+            Input {
                 key: Key::Char('z'),
                 ctrl: true,
                 alt: false,
@@ -500,6 +555,239 @@ impl TextArea {
                     true
                 } else {
                     false
+                }
+            }
+            Input {
+                key: Key::Char('c'),
+                ctrl: true,
+                alt: false,
+                shift: false,
+            } => {
+                if let Some(selected_text) = self.selected_text(false) {
+                    _ = self.clipboard.set_text(selected_text.join("\n"));
+                }
+                false
+            }
+            Input {
+                key: Key::Char('x'),
+                ctrl: true,
+                alt: false,
+                shift: false,
+            } => {
+                if let Some((selection, selected_text)) = self.selection().zip(self.selected_text(false)) {
+                    let lines = &self.lines;
+                    let cursor = self.cursor();
+
+                    let start = if cursor < selection { cursor } else { selection };
+
+                    _ = self.clipboard.set_text(selected_text.join("\n"));
+                    let cursor = self.do_action(HistoryAction::RemoveLines {
+                        lines: selected_text,
+                        position: BytePosition {
+                            row: cursor.row,
+                            col: lines[cursor.row].byte_index(cursor.col),
+                        },
+                        cursor: (cursor, start),
+                    });
+                    self.set_cursor(cursor, false);
+
+                    true
+                } else {
+                    false
+                }
+            }
+            Input {
+                key: Key::Char('v'),
+                ctrl: true,
+                alt: false,
+                shift: false,
+            } => {
+                if let Ok(text) = self.clipboard.get_text() {
+                    let text = text.lines().map(|l| l.to_string()).collect::<Vec<_>>();
+                    let cursor = self.cursor();
+
+                    let cursor = match self.selection().zip(self.selected_text(true)) {
+                        Some((selection, selected_text)) => {
+                            let start = if cursor < selection { cursor } else { selection };
+                            self.do_action(HistoryAction::RemoveLines {
+                                lines: selected_text,
+                                position: BytePosition::from_line(start, &self.lines[start.row]),
+                                cursor: (cursor, start),
+                            })
+                        }
+                        None => cursor,
+                    };
+
+                    let cursor_after = if text.len() > 1 {
+                        CursorPosition {
+                            row: cursor.row + text.len() - 1,
+                            col: text.last().unwrap().chars().count(),
+                        }
+                    } else {
+                        CursorPosition {
+                            col: cursor.col + text[0].len(),
+                            ..cursor
+                        }
+                    };
+
+                    let cursor = self.do_action(HistoryAction::InsertLines {
+                        lines: text,
+                        position: BytePosition {
+                            row: cursor.row,
+                            col: self.lines[cursor.row].byte_index(cursor.col),
+                        },
+                        cursor: (cursor, cursor_after),
+                    });
+                    self.set_cursor(cursor, false);
+
+                    true
+                } else {
+                    false
+                }
+            }
+            Input {
+                key: Key::Char(char),
+                ctrl: false,
+                alt: false,
+                ..
+            } => {
+                let cursor = self.cursor();
+                let selection = self.selection();
+
+                match self.selected_text(true).zip(selection) {
+                    Some((selected_text, selection)) => {
+                        let start = if cursor < selection { cursor } else { selection };
+
+                        let cursor = self.do_action(HistoryAction::RemoveLines {
+                            lines: selected_text,
+                            position: BytePosition::from_line(start, &self.lines[start.row]),
+                            cursor: (cursor, start),
+                        });
+
+                        let cursor = self.do_action(HistoryAction::InsertChar {
+                            char,
+                            position: BytePosition::from_line(
+                                CursorPosition { col: cursor.col, ..cursor },
+                                &self.lines[cursor.row],
+                            ),
+                            cursor: (cursor, CursorPosition { col: cursor.col + 1, ..cursor }),
+                        });
+                        self.set_cursor(cursor, false);
+                    }
+                    None => {
+                        let cursor = self.do_action(HistoryAction::InsertChar {
+                            char,
+                            position: BytePosition::from_line(
+                                CursorPosition { col: cursor.col, ..cursor },
+                                &self.lines[cursor.row],
+                            ),
+                            cursor: (cursor, CursorPosition { col: cursor.col + 1, ..cursor }),
+                        });
+                        self.set_cursor(cursor, false);
+                    }
+                }
+
+                true
+            }
+            Input {
+                key: Key::Backspace,
+                alt: false,
+                ctrl,
+                ..
+            } => {
+                let cursor = self.cursor();
+                let selection = self.selection();
+                let selected_text = self.selected_text(true);
+
+                let lines = &self.lines;
+
+                if let Some((selected_text, selection)) = selected_text.zip(selection) {
+                    let start = if cursor < selection { cursor } else { selection };
+
+                    let cursor = self.do_action(HistoryAction::RemoveLines {
+                        lines: selected_text,
+                        position: BytePosition::from_line(start, &lines[start.row]),
+                        cursor: (cursor, start),
+                    });
+                    self.set_cursor(cursor, false);
+
+                    true
+                } else if ctrl {
+                    let action = match lines[cursor.row].previous_word(cursor.col) {
+                        Some(col) => Some(HistoryAction::RemoveLines {
+                            lines: vec![lines[cursor.row].char_slice(col..cursor.col).to_string()],
+                            position: BytePosition {
+                                row: cursor.row,
+                                col: lines[cursor.row].byte_index(col),
+                            },
+                            cursor: (cursor, CursorPosition { col, ..cursor }),
+                        }),
+                        None if cursor.col > 0 => Some(HistoryAction::RemoveLines {
+                            lines: vec![lines[cursor.row].char_slice(0..cursor.col).to_string()],
+                            position: BytePosition { row: cursor.row, col: 0 },
+                            cursor: (cursor, CursorPosition { col: 0, ..cursor }),
+                        }),
+                        None if cursor.row > 0 => Some(HistoryAction::RemoveLinebreak {
+                            position: BytePosition {
+                                row: cursor.row - 1,
+                                col: lines[cursor.row - 1].len(),
+                            },
+                            cursor: (
+                                cursor,
+                                CursorPosition {
+                                    row: cursor.row - 1,
+                                    col: lines[cursor.row - 1].chars().count(),
+                                },
+                            ),
+                        }),
+                        None => None,
+                    };
+
+                    if let Some(action) = action {
+                        let cursor = self.do_action(action);
+                        self.set_cursor(cursor, false);
+                    }
+
+                    true
+                } else {
+                    match cursor {
+                        CursorPosition { row: 0, col: 0 } => false,
+                        CursorPosition { col: 0, .. } => {
+                            let cursor = self.do_action(HistoryAction::RemoveLinebreak {
+                                position: BytePosition {
+                                    row: cursor.row - 1,
+                                    col: lines[cursor.row - 1].len(),
+                                },
+                                cursor: (
+                                    cursor,
+                                    CursorPosition {
+                                        row: cursor.row - 1,
+                                        col: lines[cursor.row - 1].chars().count(),
+                                    },
+                                ),
+                            });
+                            self.set_cursor(cursor, false);
+                            true
+                        }
+                        _ => {
+                            let cursor = self.do_action(HistoryAction::RemoveChar {
+                                char: self.lines[cursor.row].chars().nth(cursor.col - 1).unwrap(),
+                                position: BytePosition {
+                                    row: cursor.row,
+                                    col: lines[cursor.row].byte_index(cursor.col - 1),
+                                },
+                                cursor: (
+                                    cursor,
+                                    CursorPosition {
+                                        row: cursor.row,
+                                        col: cursor.col - 1,
+                                    },
+                                ),
+                            });
+                            self.set_cursor(cursor, false);
+                            true
+                        }
+                    }
                 }
             }
 
@@ -602,6 +890,55 @@ impl TextArea {
             prev_end = m.end();
         }
         spans.push(Span::from(&line[prev_end..]));
+    }
+
+    pub fn selected_text(&mut self, unselect: bool) -> Option<Vec<String>> {
+        let selection = self.selection()?;
+        if unselect {
+            self.set_selection(None);
+        }
+
+        let lines = &self.lines;
+        let cursor = self.cursor();
+
+        let (start, end) = if cursor < selection {
+            (cursor, selection)
+        } else {
+            (selection, cursor)
+        };
+
+        if start.row == end.row {
+            return Some(vec![lines[start.row].char_slice(start.col..end.col).to_string()]);
+        }
+
+        let mut text = Vec::with_capacity(end.row - start.row + 1);
+        text.push(lines[start.row].char_slice(start.col..).to_string());
+        lines[start.row + 1..end.row]
+            .iter()
+            .for_each(|line| text.push(line.to_string()));
+        text.push(lines[end.row].char_slice(..end.col).to_string());
+
+        Some(text)
+    }
+
+    pub fn selected_text_single_line(&self) -> Option<&str> {
+        let lines = &self.lines;
+        let cursor = self.cursor();
+        let selection = self.selection();
+
+        if let Some(selection) = selection {
+            if cursor.row != selection.row {
+                return None;
+            }
+
+            if selection < cursor {
+                Some(lines[cursor.row].char_slice(selection.col..cursor.col))
+            } else {
+                Some(lines[cursor.row].char_slice(cursor.col..selection.col))
+            }
+        } else {
+            None
+        }
     }
 }
 

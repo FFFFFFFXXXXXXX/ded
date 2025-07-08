@@ -5,6 +5,7 @@ pub trait CharSlice<'a> {
 }
 
 impl<'a> CharSlice<'a> for str {
+    #[inline(always)]
     fn char_slice(&'a self, range: impl RangeBounds<usize>) -> &'a str {
         let Some(start) = (match range.start_bound() {
             Bound::Included(&col) => self.char_indices().nth(col).map(|(i, _)| i),

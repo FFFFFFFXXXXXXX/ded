@@ -237,11 +237,17 @@ impl<'a> App<'a> {
             Input {
                 key: Key::Char('f'),
                 ctrl: true,
-                ..
+                alt: false,
+                shift: false,
             } => {
                 let search_pattern = {
                     let prev_search_pattern = buffer.searchbox.open();
-                    buffer.editor.selected_text().unwrap_or(prev_search_pattern).to_owned()
+                    buffer
+                        .editor
+                        .textarea
+                        .selected_text_single_line()
+                        .unwrap_or(prev_search_pattern)
+                        .to_owned()
                 };
 
                 buffer.searchbox.set_text(&search_pattern);
@@ -262,7 +268,7 @@ enum Status {
     Stop,
 }
 
-#[derive(Debug, Default)]
+#[derive(Default)]
 struct Buffer<'a> {
     path: PathBuf,
     searchbox: SearchBox<'a>,

@@ -5,10 +5,9 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
 use ratatui::widgets::{Block, Borders, Widget};
 
-use crate::input::{Input, Key};
+use crate::input::Input;
 use crate::textarea::{CursorPosition, TextArea};
 
-#[derive(Debug)]
 pub struct SearchBox<'a> {
     pub textarea: TextArea,
     border_block: Block<'a>,
@@ -54,26 +53,7 @@ impl<'a> SearchBox<'a> {
     }
 
     pub fn input(&mut self, input: Input) -> Option<&'_ str> {
-        match input {
-            Input {
-                key: Key::Char(c),
-                shift,
-                alt: false,
-                ctrl: false,
-            } => {
-                //
-                true
-            }
-            Input { key: Key::Enter, .. } => {
-                //
-                true
-            }
-            input => {
-                self.textarea.input(input);
-                false
-            }
-        }
-        .then(|| self.text())
+        self.textarea.input(input).then_some(self.text())
     }
 
     pub fn set_error_message(&mut self, error_message: Option<impl Display>) {

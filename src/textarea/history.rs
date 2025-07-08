@@ -1,4 +1,4 @@
-use crate::textarea::CursorPosition;
+use crate::textarea::{ByteIndex, CursorPosition};
 
 #[derive(Debug, Copy, Clone)]
 pub struct BytePosition {
@@ -10,11 +10,7 @@ impl BytePosition {
     pub fn from_line(cursor: CursorPosition, line: &str) -> Self {
         Self {
             row: cursor.row,
-            col: line
-                .char_indices()
-                .nth(cursor.col)
-                .map(|(idx, _)| idx)
-                .unwrap_or_else(|| line.len()),
+            col: line.byte_index(cursor.col),
         }
     }
 }
