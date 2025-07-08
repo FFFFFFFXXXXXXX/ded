@@ -246,8 +246,8 @@ impl TextArea {
                     .iter()
                     .enumerate()
                     .rev()
-                    .skip_while(|(_, line)| line.is_empty())
-                    .find_map(|(idx, line)| line.is_empty().then_some(idx + 1))
+                    .skip_while(|(_, line)| line.trim_start().is_empty())
+                    .find_map(|(idx, line)| line.trim_start().is_empty().then_some(idx + 1))
                     .unwrap_or(0);
                 let col = cursor.col.min(lines[row].len());
 
@@ -299,19 +299,19 @@ impl TextArea {
                 let lines = &self.lines;
                 let cursor = self.cursor();
 
-                let row = if lines[cursor.row].is_empty() {
+                let row = if lines[cursor.row].trim_start().is_empty() {
                     lines[cursor.row..]
                         .iter()
                         .enumerate()
                         .skip(1)
-                        .find_map(|(idx, line)| (!line.is_empty()).then_some(cursor.row + idx))
+                        .find_map(|(idx, line)| (!line.trim_start().is_empty()).then_some(cursor.row + idx))
                         .unwrap_or_else(|| lines.len().saturating_sub(1))
                 } else {
                     lines[cursor.row..]
                         .iter()
                         .enumerate()
                         .skip(1)
-                        .find_map(|(idx, line)| line.is_empty().then_some(cursor.row + idx))
+                        .find_map(|(idx, line)| line.trim_start().is_empty().then_some(cursor.row + idx))
                         .unwrap_or_else(|| lines.len().saturating_sub(1))
                 };
 
@@ -790,7 +790,108 @@ impl TextArea {
                     }
                 }
             }
+            Input {
+                key: Key::Delete,
+                alt: false,
+                ctrl,
+                ..
+            } => {
+                let cursor = self.cursor();
+                let selection = self.selection();
+                let selected_text = self.selected_text(true);
 
+                let lines = &self.lines;
+
+                if let Some((selected_text, selection)) = selected_text.zip(selection) {
+                    let start = if cursor < selection { cursor } else { selection };
+
+                    let cursor = self.do_action(HistoryAction::RemoveLines {
+                        lines: selected_text,
+                        position: BytePosition::from_line(start, &lines[start.row]),
+                        cursor: (cursor, start),
+                    });
+                    self.set_cursor(cursor, false);
+
+                    true
+                } else if ctrl {
+                    let action = match lines[cursor.row].next_word(cursor.col) {
+                        Some(col) => Some(HistoryAction::RemoveLines {
+                            lines: vec![dbg!(lines[cursor.row].char_slice(cursor.col..col)).to_string()],
+                            position: BytePosition {
+                                row: cursor.row,
+                                col: lines[cursor.row].byte_index(cursor.col),
+                            },
+                            cursor: (cursor, cursor),
+                        }),
+                        None if cursor.col < lines[cursor.row].len() => Some(HistoryAction::RemoveLines {
+                            lines: vec![lines[cursor.row].char_slice(cursor.col..).to_string()],
+                            position: BytePosition {
+                                row: cursor.row,
+                                col: lines[cursor.row].byte_index(cursor.col),
+                            },
+                            cursor: (cursor, cursor),
+                        }),
+                        None if cursor.row < lines.len() - 1 => Some(HistoryAction::RemoveLinebreak {
+                            position: BytePosition {
+                                row: cursor.row,
+                                col: lines[cursor.row].byte_index(cursor.col),
+                            },
+                            cursor: (cursor, cursor),
+                        }),
+                        None => None,
+                    };
+
+                    if let Some(action) = action {
+                        let cursor = self.do_action(action);
+                        self.set_cursor(cursor, false);
+                    }
+
+                    true
+                } else {
+                    match cursor {
+                        CursorPosition { row, col } if row == lines.len() - 1 && col == lines.last().unwrap().len() => {
+                            false
+                        }
+                        CursorPosition { col, .. } if col == lines[cursor.row].len() => {
+                            let cursor = self.do_action(HistoryAction::RemoveLinebreak {
+                                position: BytePosition {
+                                    row: cursor.row,
+                                    col: lines[cursor.row].len(),
+                                },
+                                cursor: (cursor, cursor),
+                            });
+                            self.set_cursor(cursor, false);
+                            true
+                        }
+                        _ => {
+                            let cursor = self.do_action(HistoryAction::RemoveChar {
+                                char: self.lines[cursor.row].chars().nth(cursor.col).unwrap(),
+                                position: BytePosition {
+                                    row: cursor.row,
+                                    col: lines[cursor.row].byte_index(cursor.col),
+                                },
+                                cursor: (cursor, cursor),
+                            });
+                            self.set_cursor(cursor, false);
+                            true
+                        }
+                    }
+                }
+            }
+            // Input {
+            //     key: Key::Tab,
+            //     alt: false,
+            //     ctrl: false,
+            //     shift,
+            // } => {
+
+            //     let cursor = self.cursor();
+            //     let line = &self.lines[cursor.row];
+
+            //     if line.starts_with(self.indent.)
+
+            //     true
+            // }
             _ => false,
         }
     }
@@ -966,7 +1067,13 @@ impl Widget for &TextArea {
                         ..(bottom_right.col - line_number_len.map(|ln| usize::from(u8::from(ln))).unwrap_or_default()),
                 )
             })
-            .map(|line| line.replace('\t', self.indent.spaces()))
+            .map(|line| {
+                let trimmed = line.trim_end();
+                String::from_iter([
+                    &trimmed.replace('\t', self.indent.spaces()),
+                    dots((line.chars().count() - trimmed.chars().count()).try_into().unwrap()),
+                ])
+            })
             .collect::<Vec<_>>();
 
         let lines = lines.iter().zip(start..end).map(|(line, line_number)| {
@@ -1026,4 +1133,9 @@ pub fn num_digits(i: usize) -> u8 {
 pub fn spaces(size: u8) -> &'static str {
     const SPACES: &str = "                                                                                                                                                                                                                                                                      ";
     &SPACES[..size.into()]
+}
+
+pub fn dots(size: u8) -> &'static str {
+    const DOTS: &str = "········································································································································································································································································";
+    &DOTS[..('·'.len_utf8() * usize::from(size))]
 }

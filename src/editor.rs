@@ -22,7 +22,7 @@ impl Editor {
             buf.clear();
             match file_reader.read_line(&mut buf)? {
                 0 => break,
-                _n => {
+                _ => {
                     if indent.is_none() {
                         if buf.starts_with('\t') {
                             indent = Some(Indent::Tabs);
