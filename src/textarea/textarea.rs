@@ -689,12 +689,7 @@ impl TextArea {
                     false
                 }
             }
-            Input {
-                key: Key::Char(char),
-                ctrl: false,
-                alt: false,
-                ..
-            } => {
+            Input { key: Key::Char(char), .. } => {
                 let cursor = self.cursor();
                 let selection = self.selection();
 
