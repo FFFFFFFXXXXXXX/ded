@@ -567,7 +567,7 @@ impl TextArea {
                 alt: false,
                 shift: false,
             } => {
-                if let Some(cursor) = dbg!(self.undo_action()) {
+                if let Some(cursor) = self.undo_action() {
                     self.set_cursor(cursor, false);
                     true
                 } else {

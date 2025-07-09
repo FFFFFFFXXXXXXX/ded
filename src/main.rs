@@ -57,7 +57,7 @@ impl<'a> App<'a> {
             // render state to terminal
             self.render(&mut terminal)?;
 
-            match dbg!(crossterm::event::read()?) {
+            match crossterm::event::read()? {
                 Event::Resize(_, _) => self.render(&mut terminal)?,
                 Event::Key(event) => {
                     let event = event.into();
@@ -67,7 +67,7 @@ impl<'a> App<'a> {
                     }
 
                     // process input / change state
-                    if self.process_input(dbg!(event))? == Status::Stop {
+                    if self.process_input(event)? == Status::Stop {
                         break;
                     }
                 }
