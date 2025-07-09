@@ -31,8 +31,8 @@ pub struct TextArea {
     selection: Option<CursorPosition>,
     view: View,
 
-    undo_history: Vec<HistoryAction>,
-    redo_history: Vec<HistoryAction>,
+    undo_history: Vec<(HistoryAction, bool)>,
+    redo_history: Vec<(HistoryAction, bool)>,
 
     clipboard: Clipboard,
     search_pattern: Option<Regex>,
@@ -198,24 +198,48 @@ impl TextArea {
         self.redo_history.clear();
 
         let cursor = history_action.apply(&mut self.lines);
-        self.undo_history.push(history_action);
+        self.undo_history.push((history_action, false));
+        cursor
+    }
+
+    pub fn do_action_chain(&mut self, history_action: HistoryAction) -> CursorPosition {
+        self.redo_history.clear();
+
+        let cursor = history_action.apply(&mut self.lines);
+        self.undo_history.push((history_action, true));
         cursor
     }
 
     pub fn undo_action(&mut self) -> Option<CursorPosition> {
-        let action = self.undo_history.pop()?.invert();
-        let cursor = action.apply(&mut self.lines);
-        self.redo_history.push(action);
+        let mut chain;
+        loop {
+            let (action, next_chain) = self.undo_history.pop()?;
+            chain = next_chain;
 
-        Some(cursor)
+            let inverse_action = action.invert();
+            let cursor = inverse_action.apply(&mut self.lines);
+            self.redo_history.push((inverse_action, chain));
+
+            if !chain {
+                return Some(cursor);
+            }
+        }
     }
 
     pub fn redo_action(&mut self) -> Option<CursorPosition> {
-        let action = self.redo_history.pop()?.invert();
-        let cursor = action.apply(&mut self.lines);
-        self.undo_history.push(action);
+        let mut chain;
+        loop {
+            let (action, next_chain) = self.redo_history.pop()?;
+            chain = next_chain;
 
-        Some(cursor)
+            let inverse_action = action.invert();
+            let cursor = inverse_action.apply(&mut self.lines);
+            self.undo_history.push((inverse_action, chain));
+
+            if !chain {
+                return Some(cursor);
+            }
+        }
     }
 
     pub fn input(&mut self, input: Input) -> bool {
@@ -543,7 +567,7 @@ impl TextArea {
                 alt: false,
                 shift: false,
             } => {
-                if let Some(cursor) = self.undo_action() {
+                if let Some(cursor) = dbg!(self.undo_action()) {
                     self.set_cursor(cursor, false);
                     true
                 } else {
@@ -612,16 +636,19 @@ impl TextArea {
                     let text = text.lines().map(|l| l.to_string()).collect::<Vec<_>>();
                     let cursor = self.cursor();
 
-                    let cursor = match self.selection().zip(self.selected_text(true)) {
+                    let (cursor, chain) = match self.selection().zip(self.selected_text(true)) {
                         Some((selection, selected_text)) => {
                             let start = if cursor < selection { cursor } else { selection };
-                            self.do_action(HistoryAction::RemoveLines {
-                                lines: selected_text,
-                                position: BytePosition::from_line(start, &self.lines[start.row]),
-                                cursor: (cursor, start),
-                            })
+                            (
+                                self.do_action(HistoryAction::RemoveLines {
+                                    lines: selected_text,
+                                    position: BytePosition::from_line(start, &self.lines[start.row]),
+                                    cursor: (cursor, start),
+                                }),
+                                true,
+                            )
                         }
-                        None => cursor,
+                        None => (cursor, false),
                     };
 
                     let cursor_after = if text.len() > 1 {
@@ -636,14 +663,25 @@ impl TextArea {
                         }
                     };
 
-                    let cursor = self.do_action(HistoryAction::InsertLines {
-                        lines: text,
-                        position: BytePosition {
-                            row: cursor.row,
-                            col: self.lines[cursor.row].byte_index(cursor.col),
-                        },
-                        cursor: (cursor, cursor_after),
-                    });
+                    let cursor = if chain {
+                        self.do_action_chain(HistoryAction::InsertLines {
+                            lines: text,
+                            position: BytePosition {
+                                row: cursor.row,
+                                col: self.lines[cursor.row].byte_index(cursor.col),
+                            },
+                            cursor: (cursor, cursor_after),
+                        })
+                    } else {
+                        self.do_action(HistoryAction::InsertLines {
+                            lines: text,
+                            position: BytePosition {
+                                row: cursor.row,
+                                col: self.lines[cursor.row].byte_index(cursor.col),
+                            },
+                            cursor: (cursor, cursor_after),
+                        })
+                    };
                     self.set_cursor(cursor, false);
 
                     true
@@ -670,7 +708,7 @@ impl TextArea {
                             cursor: (cursor, start),
                         });
 
-                        let cursor = self.do_action(HistoryAction::InsertChar {
+                        let cursor = self.do_action_chain(HistoryAction::InsertChar {
                             char,
                             position: BytePosition::from_line(cursor, &self.lines[cursor.row]),
                             cursor: (cursor, CursorPosition { col: cursor.col + 1, ..cursor }),
@@ -878,20 +916,7 @@ impl TextArea {
                     }
                 }
             }
-            // Input {
-            //     key: Key::Tab,
-            //     alt: false,
-            //     ctrl: false,
-            //     shift,
-            // } => {
 
-            //     let cursor = self.cursor();
-            //     let line = &self.lines[cursor.row];
-
-            //     if line.starts_with(self.indent.)
-
-            //     true
-            // }
             _ => false,
         }
     }

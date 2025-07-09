@@ -45,6 +45,10 @@ pub enum HistoryAction {
         position: BytePosition,
         cursor: (CursorPosition, CursorPosition),
     },
+    SwapLines {
+        lines: (usize, usize),
+        cursor: (CursorPosition, CursorPosition),
+    },
 }
 
 impl HistoryAction {
@@ -90,6 +94,13 @@ impl HistoryAction {
             } => HistoryAction::InsertLines {
                 lines,
                 position,
+                cursor: (c2, c1),
+            },
+            HistoryAction::SwapLines {
+                lines: (l1, l2),
+                cursor: (c1, c2),
+            } => HistoryAction::SwapLines {
+                lines: (l2, l1),
                 cursor: (c2, c1),
             },
         }
@@ -157,6 +168,13 @@ impl HistoryAction {
                     lines.drain(position.row + 1..position.row + ls.len());
                 }
                 *c
+            }
+            HistoryAction::SwapLines {
+                lines: (l1, l2),
+                cursor: (_, c2),
+            } => {
+                lines.swap(*l1, *l2);
+                *c2
             }
         }
     }
