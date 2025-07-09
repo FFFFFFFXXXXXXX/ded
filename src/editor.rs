@@ -81,6 +81,93 @@ impl Editor {
 
                 true
             }
+            Input {
+                key: Key::Tab,
+                ctrl: false,
+                alt: false,
+                ..
+            } => {
+                let cursor = self.textarea.cursor();
+                let lines = &self.textarea.lines;
+
+                let action = match &self.textarea.indent {
+                    Indent::Tabs => HistoryAction::InsertChar {
+                        char: '\t',
+                        position: BytePosition::from_line(cursor, &lines[cursor.row]),
+                        cursor: (cursor, CursorPosition { col: cursor.col + 1, ..cursor }),
+                    },
+                    Indent::Spaces(spaces) => HistoryAction::InsertLines {
+                        lines: vec![spaces.clone()],
+                        position: BytePosition::from_line(cursor, &lines[cursor.row]),
+                        cursor: (
+                            cursor,
+                            CursorPosition {
+                                col: cursor.col + spaces.len(),
+                                ..cursor
+                            },
+                        ),
+                    },
+                };
+
+                let cursor = self.textarea.do_action(action);
+                self.textarea.set_cursor(cursor, false);
+                true
+            }
+            Input {
+                key: Key::BackTab,
+                ctrl: false,
+                alt: false,
+                ..
+            } => {
+                let cursor = self.textarea.cursor();
+                let lines = &self.textarea.lines;
+
+                let action = match &self.textarea.indent {
+                    Indent::Tabs => {
+                        if lines[cursor.row].starts_with('\t') {
+                            Some(HistoryAction::RemoveChar {
+                                char: '\t',
+                                position: BytePosition { row: cursor.row, col: 0 },
+                                cursor: (
+                                    cursor,
+                                    CursorPosition {
+                                        col: cursor.col.saturating_sub(1),
+                                        ..cursor
+                                    },
+                                ),
+                            })
+                        } else {
+                            None
+                        }
+                    }
+                    Indent::Spaces(spaces) => {
+                        if lines[cursor.row].starts_with('\t') || lines[cursor.row].starts_with(spaces) {
+                            Some(HistoryAction::RemoveLines {
+                                lines: vec![spaces.clone()],
+                                position: BytePosition { row: cursor.row, col: 0 },
+                                cursor: (
+                                    cursor,
+                                    CursorPosition {
+                                        col: cursor.col.saturating_sub(spaces.len()),
+                                        ..cursor
+                                    },
+                                ),
+                            })
+                        } else {
+                            None
+                        }
+                    }
+                };
+
+                match action {
+                    Some(action) => {
+                        let cursor = self.textarea.do_action(action);
+                        self.textarea.set_cursor(cursor, false);
+                        true
+                    }
+                    None => false,
+                }
+            }
 
             _ => self.textarea.input(input),
         }

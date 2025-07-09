@@ -8,6 +8,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Paragraph, Widget};
 use regex::Regex;
+use unicode_width::UnicodeWidthStr;
 
 use super::char_slice::CharSlice;
 use super::cursor::CursorPosition;
@@ -116,8 +117,13 @@ impl TextArea {
         } else {
             0
         };
+
+        let line = self.lines[self.cursor.row].char_slice(self.view.position.get().col..self.cursor.col);
+        let tabs = line.chars().filter(|&c| c == '\t').count();
+        let tab_width = self.indent.spaces().len();
+
         Position {
-            x: u16::try_from(self.cursor.col - self.view.position.get().col).unwrap() + offset + 1,
+            x: offset + 1 + u16::try_from(line.width() + (tabs * (tab_width - 1))).unwrap(),
             y: u16::try_from(self.cursor.row - self.view.position.get().row).unwrap(),
         }
     }
@@ -666,10 +672,7 @@ impl TextArea {
 
                         let cursor = self.do_action(HistoryAction::InsertChar {
                             char,
-                            position: BytePosition::from_line(
-                                CursorPosition { col: cursor.col, ..cursor },
-                                &self.lines[cursor.row],
-                            ),
+                            position: BytePosition::from_line(cursor, &self.lines[cursor.row]),
                             cursor: (cursor, CursorPosition { col: cursor.col + 1, ..cursor }),
                         });
                         self.set_cursor(cursor, false);
@@ -677,10 +680,7 @@ impl TextArea {
                     None => {
                         let cursor = self.do_action(HistoryAction::InsertChar {
                             char,
-                            position: BytePosition::from_line(
-                                CursorPosition { col: cursor.col, ..cursor },
-                                &self.lines[cursor.row],
-                            ),
+                            position: BytePosition::from_line(cursor, &self.lines[cursor.row]),
                             cursor: (cursor, CursorPosition { col: cursor.col + 1, ..cursor }),
                         });
                         self.set_cursor(cursor, false);
@@ -816,7 +816,7 @@ impl TextArea {
                 } else if ctrl {
                     let action = match lines[cursor.row].next_word(cursor.col) {
                         Some(col) => Some(HistoryAction::RemoveLines {
-                            lines: vec![dbg!(lines[cursor.row].char_slice(cursor.col..col)).to_string()],
+                            lines: vec![lines[cursor.row].char_slice(cursor.col..col).to_string()],
                             position: BytePosition {
                                 row: cursor.row,
                                 col: lines[cursor.row].byte_index(cursor.col),
@@ -916,10 +916,25 @@ impl TextArea {
                 let end = if selection.row == line_info.line_number {
                     selection.col
                 } else {
-                    self.lines[line_info.line_number].len()
+                    line.chars().count()
                 };
 
-                Some((start, end))
+                let tabs_before_selection = self.lines[line_info.line_number]
+                    .char_slice(..start)
+                    .chars()
+                    .filter(|&c| c == '\t')
+                    .count();
+                let tabs_in_selection = self.lines[line_info.line_number]
+                    .char_slice(start..end)
+                    .chars()
+                    .filter(|&c| c == '\t')
+                    .count();
+                let tab_width = self.indent.spaces().len();
+
+                Some((
+                    start + (tabs_before_selection * (tab_width - 1)),
+                    end + ((tabs_before_selection + tabs_in_selection) * (tab_width - 1)),
+                ))
             } else if selection < self.cursor
                 && selection.row <= line_info.line_number
                 && line_info.line_number <= self.cursor.row
@@ -933,10 +948,25 @@ impl TextArea {
                 let end = if self.cursor.row == line_info.line_number {
                     self.cursor.col
                 } else {
-                    self.lines[line_info.line_number].len()
+                    line.chars().count()
                 };
 
-                Some((start, end))
+                let tabs_before_selection = self.lines[line_info.line_number]
+                    .char_slice(..start)
+                    .chars()
+                    .filter(|&c| c == '\t')
+                    .count();
+                let tabs_in_selection = self.lines[line_info.line_number]
+                    .char_slice(start..end)
+                    .chars()
+                    .filter(|&c| c == '\t')
+                    .count();
+                let tab_width = self.indent.spaces().len();
+
+                Some((
+                    start + (tabs_before_selection * (tab_width - 1)),
+                    end + ((tabs_before_selection + tabs_in_selection) * (tab_width - 1)),
+                ))
             } else {
                 None
             };
@@ -1069,9 +1099,16 @@ impl Widget for &TextArea {
             })
             .map(|line| {
                 let trimmed = line.trim_end();
+                let tabs = line[trimmed.len()..].chars().filter(|&c| c == '\t').count();
+                let tab_width = self.indent.spaces().len();
+
                 String::from_iter([
                     &trimmed.replace('\t', self.indent.spaces()),
-                    dots((line.chars().count() - trimmed.chars().count()).try_into().unwrap()),
+                    dots(
+                        (line.chars().count() - trimmed.chars().count() + (tabs * (tab_width - 1)))
+                            .try_into()
+                            .unwrap(),
+                    ),
                 ])
             })
             .collect::<Vec<_>>();
@@ -1131,11 +1168,11 @@ pub fn num_digits(i: usize) -> u8 {
 }
 
 pub fn spaces(size: u8) -> &'static str {
-    const SPACES: &str = "                                                                                                                                                                                                                                                                      ";
+    const SPACES: &str = "                                                                                                                                                                                                                                                                ";
     &SPACES[..size.into()]
 }
 
 pub fn dots(size: u8) -> &'static str {
-    const DOTS: &str = "········································································································································································································································································";
+    const DOTS: &str = "································································································································································································································································";
     &DOTS[..('·'.len_utf8() * usize::from(size))]
 }

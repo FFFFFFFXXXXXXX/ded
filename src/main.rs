@@ -57,22 +57,21 @@ impl<'a> App<'a> {
             // render state to terminal
             self.render(&mut terminal)?;
 
-            // wait for next userinput (blocking!)
-            let event = crossterm::event::read()?;
-            // manually re-render on window resize because Event::Resize(_, _) gets ignored by tui_textarea
-            if let Event::Resize(_, _) = event {
-                self.render(&mut terminal)?;
-            }
+            match crossterm::event::read()? {
+                Event::Resize(_, _) => self.render(&mut terminal)?,
+                Event::Key(event) => {
+                    let event = event.into();
+                    // ignore Key::Null so we don't rerender unnecessarily
+                    if let Input { key: Key::Null, .. } = event {
+                        continue;
+                    }
 
-            let event = event.into();
-            // ignore Key::Null so we don't rerender unnecessarily
-            if let Input { key: Key::Null, .. } = event {
-                continue;
-            }
-
-            // process input / change state
-            if self.process_input(event)? == Status::Stop {
-                break;
+                    // process input / change state
+                    if self.process_input(event)? == Status::Stop {
+                        break;
+                    }
+                }
+                _ => {}
             }
         }
 
@@ -110,7 +109,13 @@ impl<'a> App<'a> {
             let slot = format!("[{}/{}]", self.current + 1, num_buffers);
             let path = format!(" {}{} ", buffer.path.display(), modified);
             let cursor = buffer.editor.textarea.cursor();
-            let cursor = format!("({},{})", cursor.row, cursor.col);
+            let cursor = match buffer.editor.textarea.selection() {
+                Some(selection) => format!(
+                    "({},{}) - ({},{})",
+                    selection.row, selection.col, cursor.row, cursor.col
+                ),
+                None => format!("({},{})", cursor.row, cursor.col),
+            };
             let status_chunks = Layout::default()
                 .direction(Direction::Horizontal)
                 .constraints(
