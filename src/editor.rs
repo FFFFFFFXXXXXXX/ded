@@ -559,22 +559,51 @@ impl Editor {
                 let cursor = self.textarea.cursor();
                 let selection = self.textarea.selection();
 
-                if (key == Key::Up && cursor.row > 0)
-                    || (key == Key::Down && cursor.row < self.textarea.lines.len() - 1)
-                {
-                    let swap_row = match key {
-                        Key::Up => cursor.row - 1,
-                        Key::Down => cursor.row + 1,
-                        _ => unreachable!(),
-                    };
+                let (start, end) = match selection {
+                    Some(selection) if cursor < selection => (cursor, selection),
+                    Some(selection) if cursor > selection => (selection, cursor),
+                    _ => (cursor, cursor),
+                };
 
-                    let cursor = self.textarea.do_action(HistoryAction::SwapLines {
-                        lines: (cursor.row, swap_row),
-                        cursor: (cursor, CursorPosition { row: swap_row, ..cursor }),
+                if key == Key::Up && start.row > 0 {
+                    let mut cursor = self.textarea.do_action(HistoryAction::SwapLines {
+                        lines: (start.row, start.row - 1),
+                        cursor: (cursor, CursorPosition { row: cursor.row - 1, ..cursor }),
                     });
+
+                    for row in (start.row..=end.row).skip(1) {
+                        cursor = self.textarea.do_action_chain(HistoryAction::SwapLines {
+                            lines: (row, row - 1),
+                            cursor: (cursor, cursor),
+                        });
+                    }
+
                     self.textarea.set_cursor(cursor, false);
-                    self.textarea
-                        .set_selection(selection.map(|selection| CursorPosition { row: swap_row, ..selection }));
+                    self.textarea.set_selection(selection.map(|selection| CursorPosition {
+                        row: selection.row - 1,
+                        ..selection
+                    }));
+
+                    true
+                } else if key == Key::Down && end.row < self.textarea.lines.len() - 1 {
+                    let mut cursor = self.textarea.do_action(HistoryAction::SwapLines {
+                        lines: (end.row, end.row + 1),
+                        cursor: (cursor, CursorPosition { row: cursor.row + 1, ..cursor }),
+                    });
+
+                    for row in (start.row..end.row).rev() {
+                        cursor = self.textarea.do_action_chain(HistoryAction::SwapLines {
+                            lines: (row, row + 1),
+                            cursor: (cursor, cursor),
+                        });
+                    }
+
+                    self.textarea.set_cursor(cursor, false);
+                    self.textarea.set_selection(selection.map(|selection| CursorPosition {
+                        row: selection.row + 1,
+                        ..selection
+                    }));
+
                     true
                 } else {
                     false
