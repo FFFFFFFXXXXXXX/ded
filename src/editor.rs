@@ -55,6 +55,10 @@ impl Editor {
             lines.push(String::new());
         }
 
+        if lines.is_empty() {
+            lines.push(String::new());
+        }
+
         let mut textarea = TextArea::default();
         textarea.lines = lines;
         textarea.indent = indent.unwrap_or_default();
