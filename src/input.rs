@@ -67,7 +67,6 @@ impl From<Event> for Input {
     fn from(event: Event) -> Self {
         match event {
             Event::Key(key) => Self::from(key),
-            // Event::Mouse(mouse) => Self::from(mouse),
             _ => Self::default(),
         }
     }

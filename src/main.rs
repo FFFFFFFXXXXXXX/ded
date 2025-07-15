@@ -53,12 +53,10 @@ impl<'a> App<'a> {
     }
 
     fn run(&mut self, mut terminal: DefaultTerminal) -> Result<()> {
-        loop {
-            // render state to terminal
-            self.render(&mut terminal)?;
+        self.render(&mut terminal)?;
 
+        loop {
             match crossterm::event::read()? {
-                Event::Resize(_, _) => self.render(&mut terminal)?,
                 Event::Key(event) => {
                     let event = event.into();
                     // ignore Key::Null so we don't rerender unnecessarily
@@ -70,7 +68,10 @@ impl<'a> App<'a> {
                     if self.process_input(event)? == Status::Stop {
                         break;
                     }
+
+                    self.render(&mut terminal)?;
                 }
+                Event::Resize(_, _) => self.render(&mut terminal)?,
                 _ => {}
             }
         }

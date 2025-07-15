@@ -89,42 +89,58 @@ impl TextArea {
         self.view.width.set(width);
         self.view.height.set(height);
 
+        let cursor = self.cursor();
+        let position = self.view.position.get();
+
+        let slice = self.lines[cursor.row].char_slice(..cursor.col);
+        let tabs = slice.chars().filter(|&c| c == '\t').count();
+        let tab_width = self.indent.spaces().len();
+        let x = slice.width() + tabs * (tab_width - 1);
+
         self.view.position.set(CursorPosition {
-            row: self.view.position.get().row.clamp(
-                self.cursor.row.saturating_sub(self.view.height.get() - 1),
-                self.cursor.row,
+            row: position.row.clamp(cursor.row.saturating_sub(height - 1), cursor.row),
+            col: position.col.clamp(
+                x.saturating_sub(width - usize::from(num_digits(self.lines.len())) - 1),
+                x,
             ),
-            col: self
-                .view
-                .position
-                .get()
-                .col
-                .clamp(self.cursor.col.saturating_sub(self.view.width.get()), self.cursor.col),
         });
 
+        let position = self.view.position.get();
         (
-            self.view.position.get(),
+            position,
             CursorPosition {
-                row: self.view.position.get().row.saturating_add(self.view.height.get()),
-                col: self.view.position.get().col.saturating_add(self.view.width.get()),
+                row: position.row.saturating_add(height),
+                col: position.col.saturating_add(width),
             },
         )
     }
 
     pub fn terminal_cursor_position(&self) -> Position {
         let offset = if self.line_numbers {
-            u16::from(num_digits(self.lines.len()))
+            u16::from(num_digits(self.lines.len())) + 1
         } else {
             0
         };
 
-        let line = self.lines[self.cursor.row].char_slice(self.view.position.get().col..self.cursor.col);
-        let tabs = line.chars().filter(|&c| c == '\t').count();
+        let position = self.view.position.get();
+        let cursor = self.cursor();
         let tab_width = self.indent.spaces().len();
 
+        let col = {
+            let slice = self.lines[cursor.row].char_slice(..cursor.col);
+            let tabs = slice.chars().filter(|&c| c == '\t').count();
+            slice.width() + tabs * (tab_width - 1)
+        };
+
+        let line = self.lines[cursor.row].replace("\t", self.indent.spaces());
+        let slice = line.as_str().char_slice(position.col..col);
+
+        let tabs = slice.chars().filter(|&c| c == '\t').count();
+        let line_width = slice.width() + tabs * (tab_width - 1);
+
         Position {
-            x: offset + 1 + u16::try_from(line.width() + (tabs * (tab_width - 1))).unwrap(),
-            y: u16::try_from(self.cursor.row - self.view.position.get().row).unwrap(),
+            x: offset + u16::try_from(line_width).unwrap(),
+            y: u16::try_from(cursor.row - position.row).unwrap(),
         }
     }
 
@@ -1098,25 +1114,13 @@ impl Widget for &TextArea {
     where
         Self: Sized,
     {
-        let (top_left, bottom_right) = self.update_size(area.width.into(), area.height.into());
+        let (top_left, bottom_right) = self.update_size(usize::from(area.width), area.height.into());
 
         let start = cmp::min(top_left.row, self.lines.len());
         let end = cmp::min(bottom_right.row, self.lines.len());
 
-        let line_number_len = if self.line_numbers {
-            num_digits(self.lines.len()).try_into().ok()
-        } else {
-            None
-        };
-
         let lines = self.lines[start..end]
             .iter()
-            .map(|line| {
-                line.char_slice(
-                    top_left.col
-                        ..(bottom_right.col - line_number_len.map(|ln| usize::from(u8::from(ln))).unwrap_or_default()),
-                )
-            })
             .map(|line| {
                 let trimmed = line.trim_end();
                 let tabs = line[trimmed.len()..].chars().filter(|&c| c == '\t').count();
@@ -1133,9 +1137,15 @@ impl Widget for &TextArea {
             })
             .collect::<Vec<_>>();
 
+        let line_number_len: Option<NonZeroU8> = if self.line_numbers {
+            num_digits(self.lines.len()).try_into().ok()
+        } else {
+            None
+        };
+
         let lines = lines.iter().zip(start..end).map(|(line, line_number)| {
             self.render_line(
-                line,
+                line.char_slice(top_left.col..bottom_right.col),
                 LineNumber {
                     line_number,
                     line_number_len,
