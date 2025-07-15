@@ -649,9 +649,12 @@ impl TextArea {
                 shift: false,
             } => {
                 if let Ok(text) = self.clipboard.get_text() {
-                    let text = text.lines().map(|l| l.to_string()).collect::<Vec<_>>();
-                    let cursor = self.cursor();
+                    let text = text
+                        .split('\n')
+                        .map(|l| l.trim_end_matches('\r').to_string())
+                        .collect::<Vec<_>>();
 
+                    let cursor = self.cursor();
                     let (cursor, chain) = match self.selection().zip(self.selected_text(true)) {
                         Some((selection, selected_text)) => {
                             let start = if cursor < selection { cursor } else { selection };
