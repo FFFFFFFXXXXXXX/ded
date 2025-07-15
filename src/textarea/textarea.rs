@@ -95,13 +95,13 @@ impl TextArea {
         let slice = self.lines[cursor.row].char_slice(..cursor.col);
         let tabs = slice.chars().filter(|&c| c == '\t').count();
         let tab_width = self.indent.spaces().len();
-        let x = slice.width() + tabs * (tab_width - 1);
+        let col = slice.width() + tabs * (tab_width - 1);
 
         self.view.position.set(CursorPosition {
             row: position.row.clamp(cursor.row.saturating_sub(height - 1), cursor.row),
             col: position.col.clamp(
-                x.saturating_sub(width - usize::from(num_digits(self.lines.len())) - 1),
-                x,
+                col.saturating_sub(width - usize::from(num_digits(self.lines.len())) - 1),
+                col,
             ),
         });
 
@@ -938,16 +938,13 @@ impl TextArea {
     fn render_line<'l>(&self, line: &'l str, line_info: LineNumber) -> Line<'l> {
         const SELECT: Style = Style::new().bg(Color::LightBlue);
 
+        let position = self.view.position.get();
         if let Some(selection) = self.selection {
             let selected_range = if self.cursor < selection
                 && self.cursor.row <= line_info.line_number
                 && line_info.line_number <= selection.row
             {
-                let start = if self.cursor.row == line_info.line_number {
-                    self.cursor.col
-                } else {
-                    0
-                };
+                let start = if line_info.current_line { self.cursor.col } else { 0 };
 
                 let end = if selection.row == line_info.line_number {
                     selection.col
@@ -968,8 +965,9 @@ impl TextArea {
                 let tab_width = self.indent.spaces().len();
 
                 Some((
-                    start + (tabs_before_selection * (tab_width - 1)),
-                    end + ((tabs_before_selection + tabs_in_selection) * (tab_width - 1)),
+                    (start + (tabs_before_selection * (tab_width - 1))).saturating_sub(position.col),
+                    (end + ((tabs_before_selection + tabs_in_selection) * (tab_width - 1)))
+                        .saturating_sub(position.col),
                 ))
             } else if selection < self.cursor
                 && selection.row <= line_info.line_number
@@ -981,7 +979,7 @@ impl TextArea {
                     0
                 };
 
-                let end = if self.cursor.row == line_info.line_number {
+                let end = if line_info.current_line {
                     self.cursor.col
                 } else {
                     line.chars().count()
@@ -1000,8 +998,9 @@ impl TextArea {
                 let tab_width = self.indent.spaces().len();
 
                 Some((
-                    start + (tabs_before_selection * (tab_width - 1)),
-                    end + ((tabs_before_selection + tabs_in_selection) * (tab_width - 1)),
+                    (start + (tabs_before_selection * (tab_width - 1))).saturating_sub(position.col),
+                    (end + ((tabs_before_selection + tabs_in_selection) * (tab_width - 1)))
+                        .saturating_sub(position.col),
                 ))
             } else {
                 None

@@ -134,7 +134,10 @@ impl<'a> App<'a> {
             f.render_widget(Paragraph::new(cursor).style(status_style), status_chunks[2]);
 
             if buffer.searchbox.is_open() {
-                f.set_cursor_position(Position::new(buffer.searchbox.textarea.terminal_cursor_position().x, 1));
+                f.set_cursor_position(Position::new(
+                    buffer.searchbox.textarea.terminal_cursor_position().x + 1,
+                    1,
+                ));
             } else {
                 f.set_cursor_position(buffer.editor.textarea.terminal_cursor_position());
             }
