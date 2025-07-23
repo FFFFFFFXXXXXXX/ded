@@ -631,9 +631,9 @@ impl Editor {
                 true
             }
             Input {
-                key: Key::Char(char @ ('(' | '[' | '{')),
+                key: Key::Char(char @ ('(' | '[' | '{' | '\'' | '"')),
                 ..
-            } => {
+            } if !(char == '\'' && self.textarea.selection().is_none()) => {
                 let cursor = self.textarea.cursor();
                 let selection = self.textarea.selection();
 
@@ -641,6 +641,8 @@ impl Editor {
                     '(' => ')',
                     '[' => ']',
                     '{' => '}',
+                    '\'' => '\'',
+                    '"' => '"',
                     _ => unreachable!(),
                 };
 

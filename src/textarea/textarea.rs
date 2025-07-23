@@ -631,7 +631,7 @@ impl TextArea {
                         lines: selected_text,
                         position: BytePosition {
                             row: cursor.row,
-                            col: lines[cursor.row].byte_index(cursor.col),
+                            col: lines[cursor.row].byte_index(start.col),
                         },
                         cursor: (cursor, start),
                     });
