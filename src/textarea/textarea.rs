@@ -34,7 +34,7 @@ pub struct TextArea {
     undo_history: Vec<(HistoryAction, bool)>,
     redo_history: Vec<(HistoryAction, bool)>,
 
-    clipboard: Clipboard,
+    pub clipboard: Clipboard,
     search_pattern: Option<Regex>,
 
     pub indent: Indent,
@@ -611,6 +611,8 @@ impl TextArea {
             } => {
                 if let Some(selected_text) = self.selected_text(false) {
                     _ = self.clipboard.set_text(selected_text.join("\n"));
+                } else {
+                    _ = self.clipboard.set_text(&self.lines[self.cursor.row]);
                 }
                 false
             }

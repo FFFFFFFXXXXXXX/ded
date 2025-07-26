@@ -751,6 +751,39 @@ impl Editor {
 
                 true
             }
+            Input {
+                key: Key::Char('x'),
+                ctrl: true,
+                alt: false,
+                shift: false,
+            } => {
+                if self.textarea.selection().is_none() {
+                    let cursor = self.textarea.cursor();
+                    let lines = &self.textarea.lines;
+
+                    let line = lines[cursor.row].clone();
+                    _ = self.textarea.clipboard.set_text(&line);
+
+                    let cursor = if cursor.row == lines.len() {
+                        self.textarea.do_action(HistoryAction::RemoveLines {
+                            lines: vec![line],
+                            position: BytePosition { row: cursor.row, col: 0 },
+                            cursor: (cursor, CursorPosition { row: cursor.row, col: 0 }),
+                        })
+                    } else {
+                        self.textarea.do_action(HistoryAction::RemoveLines {
+                            lines: vec![line, String::new()],
+                            position: BytePosition { row: cursor.row, col: 0 },
+                            cursor: (cursor, CursorPosition { col: 0, ..cursor }),
+                        })
+                    };
+                    self.textarea.set_cursor(cursor, false);
+
+                    true
+                } else {
+                    false
+                }
+            }
 
             input => self.textarea.input(input),
         }

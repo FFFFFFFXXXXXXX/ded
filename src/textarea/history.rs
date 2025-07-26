@@ -181,8 +181,7 @@ impl HistoryAction {
                                 .unwrap_or(""),
                         );
 
-                        lines
-                            .drain((position.row + 1).min(lines.len() - 1)..(position.row + ls.len()).min(lines.len()));
+                        lines.drain((position.row + 1).min(lines.len())..(position.row + ls.len()).min(lines.len()));
                     }
                 }
 
