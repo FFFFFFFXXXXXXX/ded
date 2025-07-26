@@ -132,24 +132,34 @@ impl HistoryAction {
                 position,
                 cursor: (_, c),
             } => {
-                if ls.len() == 1 {
-                    lines[position.row].insert_str(position.col, ls.first().unwrap());
-                } else {
-                    let (l1, l2) = lines[position.row].split_at(position.col);
+                match ls.len() {
+                    0 => {}
+                    1 => {
+                        lines[position.row].insert_str(position.col, ls.first().unwrap());
+                    }
+                    _ => {
+                        if let Some((l1, l2)) = lines.get(position.row).map(|l| l.split_at(position.col)) {
+                            let mut first_line = String::from(l1);
+                            first_line.push_str(ls.first().unwrap());
 
-                    let mut first_line = String::from(l1);
-                    first_line.push_str(ls.first().unwrap());
+                            let mut last_line = String::from(ls.last().unwrap());
+                            last_line.push_str(l2);
 
-                    let mut last_line = String::from(ls.last().unwrap());
-                    last_line.push_str(l2);
+                            lines[position.row] = first_line;
+                            lines.splice(
+                                position.row + 1..position.row + 1,
+                                ls.iter().skip(1).map(|l| l.to_string()),
+                            );
+                            lines[position.row + ls.len() - 1] = last_line;
+                        } else {
+                            lines.splice(
+                                position.row..position.row,
+                                ls.iter().take(ls.len() - 1).map(|l| l.to_string()),
+                            );
+                        }
+                    }
+                };
 
-                    lines[position.row] = first_line;
-                    lines.splice(
-                        position.row + 1..position.row + 1,
-                        ls.iter().take(ls.len()).skip(1).map(|l| l.to_string()),
-                    );
-                    lines[position.row + ls.len() - 1] = last_line;
-                }
                 *c
             }
             HistoryAction::RemoveLines {
@@ -157,16 +167,25 @@ impl HistoryAction {
                 position,
                 cursor: (_, c),
             } => {
-                if ls.len() == 1 {
-                    lines[position.row].drain(position.col..position.col + ls.first().unwrap().len());
-                } else {
-                    let (a, b) = lines.split_at_mut(position.row + 1);
-                    a.last_mut()
-                        .unwrap()
-                        .replace_range(position.col.., &b[ls.len() - 2][ls.last().unwrap().len()..]);
+                match ls.len() {
+                    0 => {}
+                    1 => {
+                        lines[position.row].drain(position.col..position.col + ls.first().unwrap().len());
+                    }
+                    _ => {
+                        let (a, b) = lines.split_at_mut(position.row + 1);
+                        a.last_mut().unwrap().replace_range(
+                            position.col..,
+                            b.get(ls.len() - 2)
+                                .map(|l| &l[ls.last().unwrap().len()..])
+                                .unwrap_or(""),
+                        );
 
-                    lines.drain(position.row + 1..position.row + ls.len());
+                        lines
+                            .drain((position.row + 1).min(lines.len() - 1)..(position.row + ls.len()).min(lines.len()));
+                    }
                 }
+
                 *c
             }
             HistoryAction::SwapLines {

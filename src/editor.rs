@@ -710,8 +710,49 @@ impl Editor {
 
                 true
             }
+            Input {
+                key: Key::Char('K'),
+                ctrl: true,
+                shift: true,
+                alt: false,
+            } => {
+                let cursor = self.textarea.cursor();
+                let selection = self.textarea.selection().unwrap_or(cursor);
+                let lines = &self.textarea.lines;
 
-            _ => self.textarea.input(input),
+                let (start, end) = if cursor < selection {
+                    (cursor, selection)
+                } else {
+                    (selection, cursor)
+                };
+
+                let mut removed_lines = lines[start.row..=end.row].to_vec();
+
+                let position = if end.row == lines.len() - 1 {
+                    removed_lines.insert(0, String::new());
+
+                    let row = start.row.saturating_sub(1);
+                    let col = lines[row].len();
+                    BytePosition { row, col }
+                } else {
+                    removed_lines.push(String::new());
+                    BytePosition { row: start.row, col: 0 }
+                };
+
+                let row = start.row.min(lines.len() - removed_lines.len());
+                let col = cursor.col.min(lines[row].chars().count());
+                let cursor = self.textarea.do_action(HistoryAction::RemoveLines {
+                    lines: removed_lines,
+                    position,
+                    cursor: (cursor, CursorPosition { row, col }),
+                });
+                self.textarea.set_cursor(cursor, false);
+                self.textarea.set_selection(None);
+
+                true
+            }
+
+            input => self.textarea.input(input),
         }
     }
 }
